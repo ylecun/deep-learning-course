@@ -9,11 +9,15 @@
 --   -- fields of 'data'. It's best to explore in a lua REPL.
 --
 --]
+require "bit"
 require "io"
+require "lfs"
+require "math"
 
---- The MIDI file header.
+--- The MIDI header magic numbers.
 local HEADER, TRACK_HEADER = "MThd", "MTrk"
 
+--- MIDI file modes.
 local MODE_SINGLE_TRACK, MODE_MULTI_SYNCH, MODE_MULTI_ASYNCH = 0, 1, 2
 
 --- Convert a string of binary data to an integer.
@@ -21,7 +25,7 @@ local function string_to_int(str)
     local num = 0
     for idx = 1,#str do
         shift = 8 * (#str - idx)
-        byte = string.byte(str, idx, idx)
+        byte = str:byte(idx, idx)
         --print('num=' .. num .. ', idx=' .. idx .. ', shift=' .. shift ..
         --    ', byte=' .. byte .. ', val=' .. bit.lshift(byte, shift))
         num = num + bit.lshift(byte, shift)
@@ -29,8 +33,25 @@ local function string_to_int(str)
     return num
 end
 
---- Mask for one byte.
-local BYTE_MASK = 0xff
+--- Convert a value into a string of bytes length.
+local function int_to_string(value, bytes)
+
+    if bytes > 4 then
+        error({msg="An int is at most 4 bytes"})
+    end
+
+    -- Convert value bytes to binary one by one.
+    local binary = ""
+    for idx = bytes,1,-1 do
+        shift = 8 * (idx - 1)
+        mask = bit.lshift(0xff, shift)
+        byte = bit.rshift(bit.band(value, mask), shift)
+        binary = binary .. string.char(byte)
+    end
+
+    return binary
+end
+
 
 --- Convert a sequence of bytes to a binary string.
 --- @param data_arr a table of pairs {{#bytes, value}, ...}
@@ -40,25 +61,15 @@ local function data_to_binary_string(data_arr)
 
     for _, pair in ipairs(data_arr) do
         bytes, value = unpack(pair)
-        if bytes > 4 then
-            error({msg="An int is at most 4 bytes"})
-        end
-
-        -- Convert value bytes to binary one by one.
-        for idx = bytes,1,-1 do
-            shift = 8 * (idx - 1)
-            mask = bit.lshift(BYTE_MASK, shift)
-            byte = bit.rshift(bit.band(value, mask), shift)
-            binary = binary .. string.char(byte)
-        end
+        binary = binary..int_to_string(value, bytes)
     end
 
     return binary
 end
 
 --- Check length matches expected.
-local function get_len_check_expected(midfile, num_bytes, expected)
-    local len = string_to_int(midfile:read(num_bytes))
+local function get_len_check_expected(file, num_bytes, expected)
+    local len = string_to_int(file:read(num_bytes))
     if len ~= expected then
         error({msg=string.format(
                 "Data field len %d != expected len %d",
@@ -68,10 +79,10 @@ local function get_len_check_expected(midfile, num_bytes, expected)
 end
 
 --- Process the track header.
-local function process_track_header(midfile)
+local function process_track_header(file)
 
     -- Get track header magic number.
-    local track_header = midfile:read(4)
+    local track_header = file:read(4)
     if track_header == nil then
         return nil
     elseif track_header ~= TRACK_HEADER then
@@ -80,18 +91,18 @@ local function process_track_header(midfile)
     end
 
     return {
-        size = string_to_int(midfile:read(4)),
+        size = string_to_int(file:read(4)),
     }
 end
 
 --- Read 7-bits-per-bytes variable length field.
-local function read_var_len_value(midfile)
+local function read_var_len_value(file)
 
     -- Read variable-sized value in 7-bit bytes.
     local num_bytes, value = 0, 0
     repeat
         -- Read next byte and decrement remaining.
-        local byte_raw = string_to_int(midfile:read(1))
+        local byte_raw = string_to_int(file:read(1))
         num_bytes = num_bytes + 1
 
         -- Shift 7-bit byte into place.
@@ -118,286 +129,437 @@ local function value_to_var_len_encoding(value)
 
     for shift = 21,7,-7 do
         local byte = bit.band(bit.rshift(value, shift), 0x7f)
-        if byte > 0 or string.len(binary) > 0 then
+        if byte > 0 or binary:len() > 0 then
             binary = binary .. string.char(bit.bor(0x80, byte))
         end
         --print("shift="..shift..", byte="..byte
-        --        ..", string.len(binary)="..string.len(binary))
+        --        ..", binary:len()="..binary:len())
     end
     local lsb = bit.band(value, 0x7f)
     binary = binary .. string.char(lsb)
-    --print("shift=0, byte="..lsb..", string.len(binary)="..string.len(binary))
+    --print("shift=0, byte="..lsb..", binary:len()="..binary:len())
 
     return binary
 end
 
---- Read an event header.
-local function process_event_header(midfile)
-    local delta_bytes, delta_time = read_var_len_value(midfile)
-    return delta_bytes, { delta_time = delta_time, }
+--- Read an event containing only a text field.
+local function text_event_read(file, event)
+	local len_bytes, len = read_var_len_value(file)
+	event.len = len
+	event.text = file:read(event.len)
+	return len_bytes + len
 end
 
---- Process a meta-command with command flag 0xff.
-local function process_meta_command(midfile, event)
-
-    -- Get meta-command type.
-    event.meta_command = string_to_int(midfile:read(1))
-
-    -- Complete steps for a text command. There are several.
-    local handle_text_event = function(midfile, event)
-        local _, len = read_var_len_value(midfile)
-        event.len = len
-        event.text = midfile:read(event.len)
-
-        event.payload = data_to_binary_string({
-            {1, event.command},
-            {1, event.meta_command},
-        }) .. value_to_var_len_encoding(event.len)
-           .. event.text
-        return event
-    end
-
-    if event.meta_command == 0x00 then
-        event.common_name = "meta - set track sequence number"
-        event.len = get_len_check_expected(midfile, 1, 2)
-        event.sequence_number = string_to_int(midfile:read(2))
-
-        event.payload = data_to_binary_string({
-            {1, event.command},
-            {1, event.meta_command},
-            {1, event.len},
-            {2, event.sequence_number},
-        })
-
-    elseif event.meta_command == 0x01 then
-        event.common_name = "meta - text"
-        handle_text_event(midfile, event)
-
-    elseif event.meta_command == 0x02 then
-        event.common_name = "meta - text copyright"
-        handle_text_event(midfile, event)
-
-    elseif event.meta_command == 0x03 then
-        event.common_name = "meta - seq/track name"
-        handle_text_event(midfile, event)
-
-    elseif event.meta_command == 0x04 then
-        event.common_name = "meta - track instrument name"
-        handle_text_event(midfile, event)
-
-    elseif event.meta_command == 0x05 then
-        event.common_name = "meta - lyric"
-        handle_text_event(midfile, event)
-
-    elseif event.meta_command == 0x06 then
-        event.common_name = "meta - marker"
-        handle_text_event(midfile, event)
-
-    elseif event.meta_command == 0x07 then
-        event.common_name = "meta - cue point"
-        handle_text_event(midfile, event)
-
-    elseif event.meta_command == 0x2f then
-        event.common_name = "meta - track end"
-        event.data = string_to_int(midfile:read(1))
-        if event.data ~= 0x00 then
-            error({msg="Track end meta command had nonzero data: "
-                    .. string.format("0x%x", event.data)})
-        end
-
-        event.payload = data_to_binary_string({
-            {1, event.command},
-            {1, event.meta_command},
-            {1, event.data},
-        })
-
-    elseif event.meta_command == 0x51 then
-        event.common_name = "meta - set tempo"
-        event.len = get_len_check_expected(midfile, 1, 3)
-        event.ms_per_qrtr_note = string_to_int(midfile:read(3))
-
-        event.payload = data_to_binary_string({
-            {1, event.command},
-            {1, event.meta_command},
-            {1, event.len},
-            {3, event.ms_per_qrtr_note},
-        })
-
-    elseif event.meta_command == 0x58 then
-        event.common_name = "meta - time signature"
-        event.len = get_len_check_expected(midfile, 1, 4)
-        event.numerator = string_to_int(midfile:read(1))
-        event.denominator = string_to_int(midfile:read(1))
-        event.metro_ticks_per_click = string_to_int(midfile:read(1))
-        event.n32_notes_per_qrtr = string_to_int(midfile:read(1))
-
-        event.payload = data_to_binary_string({
-            {1, event.command},
-            {1, event.meta_command},
-            {1, event.len},
-            {1, event.numerator},
-            {1, event.denominator},
-            {1, event.metro_ticks_per_click},
-            {1, event.n32_notes_per_qrtr},
-        })
-
-    elseif event.meta_command == 0x59 then
-        event.common_name = "meta - key signature"
-        event.len = get_len_check_expected(midfile, 1, 2)
-        local sharps_and_flats = string_to_int(midfile:read(1))
-        event.sharps = bit.rshift(sharps_and_flats, 4)
-        event.flats = bit.band(sharps_and_flats, 0x0f)
-        local major_and_minor = string_to_int(midfile:read(1))
-        event.major = bit.rshift(major_and_minor, 4)
-        event.minor = bit.band(major_and_minor, 0x0f)
-
-        event.payload = data_to_binary_string({
-            {1, event.command},
-            {1, event.meta_command},
-            {1, event.len},
-            {1, sharps_and_flats},
-            {1, major_and_minor},
-        })
-
-    elseif event.meta_command == 0x7f then
-        event.common_name = "meta - sequencer specific"
-        handle_text_event(midfile, event)
-
-    else
-        event.common_name = string.format(
-                "Unrecognized meta-command: 0x%x", event.meta_command)
-        handle_text_event(midfile, event)
-    end
-
-    return event
+--- Convert a text-only event to a binary string.
+local function text_event_tostring(event)
+    return value_to_var_len_encoding(event.len) .. event.text
 end
 
---- Process a system message. Does not need to read more data.
-local function process_system_message(event)
-    if event.command == 0xf8 then
-        event.common_name = "timing clock"
-    elseif event.command == 0xfa then
-        event.common_name = "start current sequence"
-    elseif event.command == 0xfb then
-        event.common_name = "continue stopped sequence"
-    elseif event.command == 0xfc then
-        event.common_name = "stop sequence"
-    else
-        error({msg="Unrecognized system message: "
-                .. string.format("0x%x", event.command)})
-    end
-    event.payload = string.char(event.command)
+--- The event parser.
+local event_parser = {
 
-    return event
-end
+    [0xff] = {
 
---- Process a channel event.
-local function process_channel_event(midfile, event)
+        [0x00] = {
+            read = function(self, file, event)
+                event.common_name = "meta - set track sequence number"
+                event.len = get_len_check_expected(file, 1, 2)
+                event.sequence_number = string_to_int(file:read(2))
+				return 3
+            end,
+            tostring = function(self, event)
+                return data_to_binary_string({
+                    {1, event.len},
+                    {event.len, event.sequence_number},
+                })
+            end
+        },
 
-    -- Channel is lower nibble.
-    event.channel = bit.band(event.command, 0x0f)
+        [0x01] = {
+            read = function(self, file, event)
+                event.common_name = "meta - text"
+                return text_event_read(file, event)
+            end,
+            tostring = function(self, event)
+                return text_event_tostring(event)
+            end
+        },
 
-    if event.ctype == 0x8 then
-        event.common_name = "note off"
-        event.note_number = string_to_int(midfile:read(1))
-        event.velocity = string_to_int(midfile:read(1))
+        [0x02] = {
+            read = function(self, file, event)
+                event.common_name = "meta - text copyright"
+                return text_event_read(file, event)
+            end,
+            tostring = function(self, event)
+                return text_event_tostring(event)
+            end
+        },
 
-        event.payload = data_to_binary_string({
-            {1, event.command},
-            {1, event.note_number},
-            {1, event.velocity},
-        })
+        [0x03] = {
 
-    elseif event.ctype == 0x9 then
-        event.common_name = "note on"
-        event.note_number = string_to_int(midfile:read(1))
-        event.velocity = string_to_int(midfile:read(1))
+            read = function(self, file, event)
+                event.common_name = "meta - seq/track name"
+                return text_event_read(file, event)
+            end,
+            tostring = function(self, event)
+                return text_event_tostring(event)
+            end
+        },
 
-        event.payload = data_to_binary_string({
-            {1, event.command},
-            {1, event.note_number},
-            {1, event.velocity},
-        })
+        [0x04] = {
+            read = function(self, file, event)
+                event.common_name = "meta - track instrument name"
+                return text_event_read(file, event)
+            end,
+            tostring = function(self, event)
+                return text_event_tostring(event)
+            end
+        },
 
-    elseif event.ctype == 0xa then
-        event.common_name = "key after-touch"
-        event.note_number = string_to_int(midfile:read(1))
-        event.velocity = string_to_int(midfile:read(1))
+        [0x05] = {
+            read = function(self, file, event)
+                event.common_name = "meta - lyric"
+                return text_event_read(file, event)
+            end,
+            tostring = function(self, event)
+                return text_event_tostring(event)
+            end
+        },
 
-        event.payload = data_to_binary_string({
-            {1, event.command},
-            {1, event.note_number},
-            {1, event.velocity},
-        })
+        [0x06] = {
+            read = function(self, file, event)
+                event.common_name = "meta - marker"
+                return text_event_read(file, event)
+            end,
+            tostring = function(self, event)
+                return text_event_tostring(event)
+            end
+        },
 
-    elseif event.ctype == 0xb then
-        event.common_name = "control change"
-        event.controller_num = string_to_int(midfile:read(1))
-        event.new_value = string_to_int(midfile:read(1))
+        [0x07] = {
+            read = function(self, file, event)
+                event.common_name = "meta - cue point"
+                return text_event_read(file, event)
+            end,
+            tostring = function(self, event)
+                return text_event_tostring(event)
+            end
+        },
 
-        event.payload = data_to_binary_string({
-            {1, event.command},
-            {1, event.controller_num},
-            {1, event.new_value},
-        })
+        [0x2f] = {
+            read = function(self, file, event)
+                event.common_name = "meta - track end"
+                event.data = string_to_int(file:read(1))
+                if event.data ~= 0x00 then
+                    error({msg=string.format(
+                            "Track end meta command had nonzero data: 0x%x",
+                            event.data)})
+                end
+				return 1
+            end,
+            tostring = function(self, event)
+                return int_to_string(event.data, 1)
+            end
+        },
 
-    elseif event.ctype == 0xd then
-        event.common_name = "program (patch) change"
-        event.program_num = string_to_int(midfile:read(1))
+        [0x51] = {
+            read = function(self, file, event)
+                event.common_name = "meta - set tempo"
+                event.len = get_len_check_expected(file, 1, 3)
+                event.ms_per_qrtr_note = string_to_int(file:read(3))
+				return 4
+            end,
+            tostring = function(self, event)
+                return data_to_binary_string({
+                    {1, event.len},
+                    {3, event.ms_per_qrtr_note},
+                })
+            end
+        },
 
-        event.payload = data_to_binary_string({
-            {1, event.command},
-            {1, event.program_num},
-        })
+        [0x58] = {
+            read = function(self, file, event)
+                event.common_name = "meta - time signature"
+                event.len = get_len_check_expected(file, 1, 4)
+                event.numerator = string_to_int(file:read(1))
+                event.denominator = string_to_int(file:read(1))
+                event.metro_ticks_per_click = string_to_int(file:read(1))
+                event.n32_notes_per_qrtr = string_to_int(file:read(1))
+				return 5
+            end,
+            tostring = function(self, event)
+                return data_to_binary_string({
+                    {1, event.len},
+                    {1, event.numerator},
+                    {1, event.denominator},
+                    {1, event.metro_ticks_per_click},
+                    {1, event.n32_notes_per_qrtr},
+                })
+            end
+        },
 
-    elseif event.ctype == 0xd then
-        event.common_name = "channel after-touch"
-        event.channel_num = string_to_int(midfile:read(1))
+        [0x59] = {
+            read = function(self, file, event)
+                event.common_name = "meta - key signature"
+                event.len = get_len_check_expected(file, 1, 2)
+                local sharps_and_flats = string_to_int(file:read(1))
+                event.sharps = bit.rshift(sharps_and_flats, 4)
+                event.flats = bit.band(sharps_and_flats, 0x0f)
+                local major_and_minor = string_to_int(file:read(1))
+                event.major = bit.rshift(major_and_minor, 4)
+                event.minor = bit.band(major_and_minor, 0x0f)
+				return 3
+            end,
+            tostring = function(self, event)
+                local sharps_and_flats =
+                        bit.lshift(event.sharps, 4) + event.flats
+                local major_and_minor =
+                        bit.lshift(event.major, 4) + event.minor
+                return data_to_binary_string({
+                    {1, event.len},
+                    {1, sharps_and_flats},
+                    {1, major_and_minor},
+                })
+            end
+        },
 
-        event.payload = data_to_binary_string({
-            {1, event.command},
-            {1, event.channel_num},
-        })
+        [0x7f] = {
+            read = function(self, file, event)
+                event.common_name = "meta - sequencer specific"
+                return text_event_read(file, event)
+            end,
+            tostring = function(self, event)
+                return text_event_tostring(event)
+            end
+        },
 
-    elseif event.ctype == 0xe then
-        event.common_name = "pitch wheel change"
-        event.least_significant = string_to_int(midfile:read(1))
-        event.most_significant = string_to_int(midfile:read(1))
-        event.pitch = bit.lshift(bit.band(event.most_significant, 0x7f), 7)
-                + bit.band(event.least_significant, 0x7f)
+        undef = {
+            read = function(self, file, event)
+                event.common_name = string.format(
+                        "Unrecognized meta-command: 0x%x", event.meta_command)
+                return text_event_read(file, event)
+            end,
+            tostring = function(self, event)
+                return text_event_tostring(event)
+            end
+        },
 
-        event.payload = data_to_binary_string({
-            {1, event.command},
-            {1, event.least_significant},
-            {1, event.most_significant},
-        })
+        read = function(self, file, event)
+            event.meta_command = string_to_int(file:read(1))
 
-    else
-        error({msg="Unrecognized command: "
-                .. string.format("0x%x", event.command)})
-    end
-end
+			--print(string.format("meta_command=0x%x", event.meta_command))
+
+            local meta_parser = self[event.meta_command] or self.undef
+            local bytes_read = meta_parser:read(file, event)
+
+            return 1 + bytes_read
+        end,
+
+        tostring = function(self, event)
+            local meta_parser = self[event.meta_command] or self..undef
+            return  int_to_string(event.meta_command, 1)
+                    .. meta_parser:tostring(event)
+        end,
+    },
+
+	[0xf8] = {
+		read = function(self, file, event)
+			event.common_name = "timing clock"
+			return 0
+		end,
+        tostring = function(self, event) end
+	},
+
+	[0xfa] = {
+		read = function(self, file, event)
+			event.common_name = "start current sequence"
+			return 0
+		end,
+        tostring = function(self, event) end
+	},
+
+	[0xfb] = {
+		read = function(self, file, event)
+			event.common_name = "continue stopped sequence"
+			return 0
+		end,
+        tostring = function(self, event) end
+	},
+
+	[0xfc] = {
+		read = function(self, file, event)
+			event.common_name = "stop sequence"
+			return 0
+		end,
+        tostring = function(self, event) end
+	},
+
+	[0x8] = {
+		read = function(self, file, event)
+			event.common_name = "note off"
+			event.note_number = string_to_int(file:read(1))
+			event.velocity = string_to_int(file:read(1))
+			return 2
+		end,
+		tostring = function(self, event)
+			return data_to_binary_string({
+				{1, event.note_number},
+				{1, event.velocity},
+			})
+		end
+	},
+
+	[0x9] = {
+		read = function(self, file, event)
+			event.common_name = "note on"
+			event.note_number = string_to_int(file:read(1))
+			event.velocity = string_to_int(file:read(1))
+			return 2
+		end,
+		tostring = function(self, event)
+			return data_to_binary_string({
+				{1, event.note_number},
+				{1, event.velocity},
+			})
+		end
+	},
+
+	[0xa] = {
+		read = function(self, file, event)
+			event.common_name = "key after-touch"
+			event.note_number = string_to_int(file:read(1))
+			event.velocity = string_to_int(file:read(1))
+			return 2
+		end,
+		tostring = function(self, event)
+			return data_to_binary_string({
+				{1, event.note_number},
+				{1, event.velocity},
+			})
+		end
+	},
+
+	[0xb] = {
+		read = function(self, file, event)
+			event.common_name = "control change"
+			event.controller_num = string_to_int(file:read(1))
+			event.new_value = string_to_int(file:read(1))
+			return 2
+		end,
+		tostring = function(self, event)
+			return data_to_binary_string({
+				{1, event.controller_num},
+				{1, event.new_value},
+			})
+		end
+	},
+
+	[0xd] = {
+		read = function(self, file, event)
+			event.common_name = "program (patch) change"
+			event.program_num = string_to_int(file:read(1))
+			return 1
+		end,
+		tostring = function(self, event)
+			return int_to_string(event.program_num, 1)
+		end
+	},
+
+	[0xd] = {
+		read = function(self, file, event)
+			event.common_name = "channel after-touch"
+			event.channel_num = string_to_int(file:read(1))
+			return 1
+		end,
+		tostring = function(self, event)
+			return int_to_string(event.channel_num, 1)
+		end
+	},
+
+	[0xe] = {
+		read = function(self, file, event)
+			event.common_name = "pitch wheel change"
+			event.least_significant = string_to_int(file:read(1))
+			event.most_significant = string_to_int(file:read(1))
+			event.pitch = bit.lshift(bit.band(event.most_significant, 0x7f), 7)
+					+ bit.band(event.least_significant, 0x7f)
+			return 2
+		end,
+		tostring = function(self, event)
+			event.payload = data_to_binary_string({
+				{1, event.least_significant},
+				{1, event.most_significant},
+			})
+		end
+	},
+
+	undef = {
+		read = function(self, file, event)
+		event.common_name = string.format(
+				"Unrecognized command: 0x%x", event.command)
+			return text_event_read(file, event)
+		end,
+		tostring = function(self, event)
+			return text_event_tostring(event)
+		end
+	},
+
+    read = function(self, file, event)
+
+		-- Read variable length delta time field.
+		local delta_bytes, delta_time = read_var_len_value(file)
+		event.delta_time = delta_time
+
+        event.command = string_to_int(file:read(1))
+        local ctype = bit.rshift(event.command, 4)
+
+		--print(string.format("command=0x%x", event.command))
+
+        local command_parser
+		if self[event.command] ~= nil then
+			command_parser = self[event.command]
+		elseif self[ctype] ~= nil then
+			event.ctype = ctype
+			event.channel = bit.band(event.command, 0x0f)
+			command_parser = self[ctype]
+		else
+			command_parser = self.undef
+		end
+        local bytes_read = command_parser:read(file, event)
+
+        return delta_bytes + 1 + bytes_read
+    end,
+
+    tostring = function(self, event)
+        local command_parser = self[event.command]
+                or self[event.ctype]
+                or self.undef
+        return value_to_var_len_encoding(event.delta_time)
+				.. int_to_string(event.command, 1)
+                .. command_parser:tostring(event)
+    end,
+}
 
 --- Open a .mid file.
-local function open(path)
-    local midfile = io.open(path)
+local function read(path)
+    local file = io.open(path)
 
     -- Perform file IO in protected block.
     --
     local status, err_or_data = pcall(function()
 
         -- Read .mid header.
-        local header = midfile:read(4)
+        local header = file:read(4)
         if header ~= HEADER then
             error({msg=string.format("MIDI file header(%s) != expected %s",
                     header, HEADER)})
         end
-        local header_size = get_len_check_expected(midfile, 4, 6)
+        local header_size = get_len_check_expected(file, 4, 6)
 
         local data = {}
-        data.track_mode = string_to_int(midfile:read(2))
-        data.num_tracks = string_to_int(midfile:read(2))
-        data.ticks_per_qrtr = string_to_int(midfile:read(2))
+        data.track_mode = string_to_int(file:read(2))
+        data.num_tracks = string_to_int(file:read(2))
+        data.ticks_per_qrtr = string_to_int(file:read(2))
         data.tracks = {}
 
         -- Read tracks until EOF.
@@ -405,7 +567,7 @@ local function open(path)
             --print("reading track "..(#data.tracks + 1))
 
             -- Start a new track.
-            local track = process_track_header(midfile)
+            local track = process_track_header(file)
             if track == nil then
                 return data
             end
@@ -419,29 +581,8 @@ local function open(path)
                 --print("reading event "..(#events + 1))
                 --print("bytes_remain="..bytes_remain)
 
-                -- Create a new event.
-                local delta_bytes, event = process_event_header(midfile)
-                bytes_remain = bytes_remain - delta_bytes
-
-                -- The command byte will become part of the payload, so don't
-                -- deduct it yet.
-                event.command = string_to_int(midfile:read(1))
-                event.ctype = bit.rshift(event.command, 4)
-
-                --print("delta_bytes="..delta_bytes..", command="..event.command)
-
-                -- There are 3 types of events. See
-                --   http://faydoc.tripod.com/formats/mid.htm
-                -- for more information.
-                if event.ctype == 0xf then
-                    if event.command == 0xff then
-                        process_meta_command(midfile, event)
-                    else
-                        process_system_message(event)
-                    end
-                else
-                    process_channel_event(midfile, event)
-                end
+				local event = {}
+				local bytes_read = event_parser:read(file, event)
 
                 -- Add event to list for this track.
                 --print("event:")
@@ -449,7 +590,7 @@ local function open(path)
                 table.insert(events, event)
 
                 -- See if this track is read.
-                bytes_remain = bytes_remain - string.len(event.payload)
+                bytes_remain = bytes_remain - bytes_read
                 if bytes_remain == 0 then
                     --print("track "..(#data.tracks + 1).." completed")
                     break
@@ -467,7 +608,7 @@ local function open(path)
 
     end)
 
-    midfile.close()
+    file:close()
 
     if not status then
         error(err_or_data.msg)
@@ -500,7 +641,7 @@ local function _test()
     end
 
     --- Create a mocked file from data.
-    local function file_mock(data)
+    local function mock_file(data)
         return {
             data = data,
             pointer = 1,
@@ -509,7 +650,7 @@ local function _test()
                 self.pointer = self.pointer + size
                 local readval = self.data.sub(self.data, tmp, self.pointer - 1)
                 --print("i="..tmp..", j="..self.pointer..", size="..size
-                --        ..", len(readval)="..string.len(readval))
+                --        ..", readval:len()="..readval:len())
                 return readval
             end
         }
@@ -521,9 +662,9 @@ local function _test()
         -- Test simple value 0.
         local value = 0
         local binary = value_to_var_len_encoding(value)
-        assert_equals(1, string.len(binary))
-        local size, value_recovered = read_var_len_value(file_mock(binary))
-        assert_equals(string.len(binary), size)
+        assert_equals(1, binary:len())
+        local size, value_recovered = read_var_len_value(mock_file(binary))
+        assert_equals(binary:len(), size)
         assert_equals(value, value_recovered)
 
         -- Test values at borders of 7-bit bytes.
@@ -531,36 +672,98 @@ local function _test()
             -- Do on low side of 7-bit number boundary.
             local value = bit.lshift(1, 7 * i) - 1
             local binary = value_to_var_len_encoding(value)
-            assert_equals(i, string.len(binary))
-            local size, value_recovered = read_var_len_value(file_mock(binary))
-            assert_equals(string.len(binary), size)
+            assert_equals(i, binary:len())
+            local size, value_recovered = read_var_len_value(mock_file(binary))
+            assert_equals(binary:len(), size)
             assert_equals(value, value_recovered)
 
             -- Do on high side of 7-bit number boundary.
             local value = bit.lshift(1, 7 * i)
             local binary = value_to_var_len_encoding(value)
-            assert_equals(i + 1, string.len(binary))
-            local size, value_recovered = read_var_len_value(file_mock(binary))
-            assert_equals(string.len(binary), size)
+            assert_equals(i + 1, binary:len())
+            local size, value_recovered = read_var_len_value(mock_file(binary))
+            assert_equals(binary:len(), size)
             assert_equals(value, value_recovered)
         end
 
         -- Max value test.
         local value = bit.lshift(1, 7 * 4) - 1
         local binary = value_to_var_len_encoding(value)
-        assert_equals(4, string.len(binary))
-        local size, value_recovered = read_var_len_value(file_mock(binary))
-        assert_equals(string.len(binary), size)
+        assert_equals(4, binary:len())
+        local size, value_recovered = read_var_len_value(mock_file(binary))
+        assert_equals(binary:len(), size)
         assert_equals(value, value_recovered)
+    end)
+
+    -- Test event parsers.
+    check_test(function()
+
+		-- Create a simple event.
+        local event = {}
+		event.delta_time = 1021
+        event.command = 0xff
+        event.meta_command = 0x2f
+        event.data = 0
+        print("test event:")
+        print(event)
+
+		-- Serialize the simple event.
+        local binary = event_parser:tostring(event)
+        local from_binary = {}
+        event_parser:read(mock_file(binary), from_binary)
+        print("from_binary:")
+        print(from_binary)
+
+		-- Check equality.
+		for key, value in pairs(event) do
+			assert_equals(value, from_binary[key])
+		end
+
+		-- Serialize and read again since we only simulated essential
+		-- fields.
+        local binary = event_parser:tostring(from_binary)
+        local from_binary_again = {}
+        event_parser:read(mock_file(binary), from_binary_again)
+
+		-- Check equality.
+		for key, value in pairs(from_binary) do
+			assert_equals(value, from_binary_again[key])
+		end
+
+		-- See if we have the midi folder.
+		local data_dir = "midi"
+		local stat, _ = pcall(function() lfs.dir(data_dir) end)
+		if stat then
+
+			-- Get a random file from midi.
+			mid_files = {}
+			for filename in lfs.dir(data_dir) do
+				if filename:lower():find(".mid") ~= nil then
+					table.insert(mid_files, filename)
+				end
+			end
+			mid_file = mid_files[math.random(1, #mid_files)]
+			print("Using .mid file: "..mid_file)
+
+			-- Read and tostring the file.
+			data1 = mid.read(data_dir.."/"..mid_file)
+			print(data1.num_tracks)
+			for i, track in ipairs(data1.tracks) do
+				print("Track "..i.." has "..#track.events.." events.")
+			end
+
+		end
+
     end)
 end
 
 return {
     HEADER = HEADER,
+    TRACK_HEADER = TRACK_HEADER,
     MODE_SINGLE_TRACK = MODE_SINGLE_TRACK,
     MODE_MULTI_SYNCH = MODE_MULTI_SYNCH,
     MODE_MULTI_ASYNCH = MODE_MULTI_ASYNCH,
-    open = open,
+    read = read,
     write = write,
     _test = _test,
 }
