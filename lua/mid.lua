@@ -266,13 +266,13 @@ local event_parser = {
             read = function(self, file, event)
                 event.common_name = "meta - set tempo"
                 event.len = get_len_check_expected(file, 1, 3)
-                event.ms_per_qrtr_note = string_to_int(file:read(3))
+                event.us_per_qrtr_note = string_to_int(file:read(3))
 				return 4
             end,
             tostring = function(self, event)
                 return data_to_binary_string({
                     {1, event.len},
-                    {3, event.ms_per_qrtr_note},
+                    {3, event.us_per_qrtr_note},
                 })
             end
         },
