@@ -79,7 +79,7 @@ local function get_len_check_expected(file, num_bytes, expected)
 end
 
 --- Process the track header.
-local function process_track_header(file)
+local function read_track_header_and_size(file)
 
     -- Get track header magic number.
     local track_header = file:read(4)
@@ -144,15 +144,15 @@ end
 
 --- Read an event containing only a text field.
 local function text_event_read(file, event)
-	local len_bytes, len = read_var_len_value(file)
-	event.len = len
-	event.text = file:read(event.len)
-	return len_bytes + len
+    local len_bytes, len = read_var_len_value(file)
+    event.len = len
+    event.text = file:read(event.len)
+    return len_bytes + len
 end
 
 --- Convert a text-only event to a binary string.
-local function text_event_tostring(event)
-    return value_to_var_len_encoding(event.len) .. event.text
+local function text_event_write(event, file)
+    return file:write(value_to_var_len_encoding(event.len) .. event.text)
 end
 
 --- The event parser.
@@ -165,13 +165,13 @@ local event_parser = {
                 event.common_name = "meta - set track sequence number"
                 event.len = get_len_check_expected(file, 1, 2)
                 event.sequence_number = string_to_int(file:read(2))
-				return 3
+                return 3
             end,
-            tostring = function(self, event)
-                return data_to_binary_string({
+            write = function(self, event, file)
+                return file:write(data_to_binary_string({
                     {1, event.len},
                     {event.len, event.sequence_number},
-                })
+                }))
             end
         },
 
@@ -180,8 +180,8 @@ local event_parser = {
                 event.common_name = "meta - text"
                 return text_event_read(file, event)
             end,
-            tostring = function(self, event)
-                return text_event_tostring(event)
+            write = function(self, event, file)
+                return text_event_write(event, file)
             end
         },
 
@@ -190,8 +190,8 @@ local event_parser = {
                 event.common_name = "meta - text copyright"
                 return text_event_read(file, event)
             end,
-            tostring = function(self, event)
-                return text_event_tostring(event)
+            write = function(self, event, file)
+                return text_event_write(event, file)
             end
         },
 
@@ -201,8 +201,8 @@ local event_parser = {
                 event.common_name = "meta - seq/track name"
                 return text_event_read(file, event)
             end,
-            tostring = function(self, event)
-                return text_event_tostring(event)
+            write = function(self, event, file)
+                return text_event_write(event, file)
             end
         },
 
@@ -211,8 +211,8 @@ local event_parser = {
                 event.common_name = "meta - track instrument name"
                 return text_event_read(file, event)
             end,
-            tostring = function(self, event)
-                return text_event_tostring(event)
+            write = function(self, event, file)
+                return text_event_write(event, file)
             end
         },
 
@@ -221,8 +221,8 @@ local event_parser = {
                 event.common_name = "meta - lyric"
                 return text_event_read(file, event)
             end,
-            tostring = function(self, event)
-                return text_event_tostring(event)
+            write = function(self, event, file)
+                return text_event_write(event, file)
             end
         },
 
@@ -231,8 +231,8 @@ local event_parser = {
                 event.common_name = "meta - marker"
                 return text_event_read(file, event)
             end,
-            tostring = function(self, event)
-                return text_event_tostring(event)
+            write = function(self, event, file)
+                return text_event_write(event, file)
             end
         },
 
@@ -241,8 +241,8 @@ local event_parser = {
                 event.common_name = "meta - cue point"
                 return text_event_read(file, event)
             end,
-            tostring = function(self, event)
-                return text_event_tostring(event)
+            write = function(self, event, file)
+                return text_event_write(event, file)
             end
         },
 
@@ -255,10 +255,10 @@ local event_parser = {
                             "Track end meta command had nonzero data: 0x%x",
                             event.data)})
                 end
-				return 1
+                return 1
             end,
-            tostring = function(self, event)
-                return int_to_string(event.data, 1)
+            write = function(self, event, file)
+                return file:write(int_to_string(event.data, 1))
             end
         },
 
@@ -267,13 +267,13 @@ local event_parser = {
                 event.common_name = "meta - set tempo"
                 event.len = get_len_check_expected(file, 1, 3)
                 event.us_per_qrtr_note = string_to_int(file:read(3))
-				return 4
+                return 4
             end,
-            tostring = function(self, event)
-                return data_to_binary_string({
+            write = function(self, event, file)
+                return file:write(data_to_binary_string({
                     {1, event.len},
                     {3, event.us_per_qrtr_note},
-                })
+                }))
             end
         },
 
@@ -285,16 +285,16 @@ local event_parser = {
                 event.denominator = string_to_int(file:read(1))
                 event.metro_ticks_per_click = string_to_int(file:read(1))
                 event.n32_notes_per_qrtr = string_to_int(file:read(1))
-				return 5
+                return 5
             end,
-            tostring = function(self, event)
-                return data_to_binary_string({
+            write = function(self, event, file)
+                return file:write(data_to_binary_string({
                     {1, event.len},
                     {1, event.numerator},
                     {1, event.denominator},
                     {1, event.metro_ticks_per_click},
                     {1, event.n32_notes_per_qrtr},
-                })
+                }))
             end
         },
 
@@ -308,18 +308,18 @@ local event_parser = {
                 local major_and_minor = string_to_int(file:read(1))
                 event.major = bit.rshift(major_and_minor, 4)
                 event.minor = bit.band(major_and_minor, 0x0f)
-				return 3
+                return 3
             end,
-            tostring = function(self, event)
+            write = function(self, event, file)
                 local sharps_and_flats =
                         bit.lshift(event.sharps, 4) + event.flats
                 local major_and_minor =
                         bit.lshift(event.major, 4) + event.minor
-                return data_to_binary_string({
+                return file:write(data_to_binary_string({
                     {1, event.len},
                     {1, sharps_and_flats},
                     {1, major_and_minor},
-                })
+                }))
             end
         },
 
@@ -328,8 +328,8 @@ local event_parser = {
                 event.common_name = "meta - sequencer specific"
                 return text_event_read(file, event)
             end,
-            tostring = function(self, event)
-                return text_event_tostring(event)
+            write = function(self, event, file)
+                return text_event_write(event, file)
             end
         },
 
@@ -339,15 +339,15 @@ local event_parser = {
                         "Unrecognized meta-command: 0x%x", event.meta_command)
                 return text_event_read(file, event)
             end,
-            tostring = function(self, event)
-                return text_event_tostring(event)
+            write = function(self, event, file)
+                return text_event_write(event, file)
             end
         },
 
         read = function(self, file, event)
             event.meta_command = string_to_int(file:read(1))
 
-			--print(string.format("meta_command=0x%x", event.meta_command))
+            --print(string.format("meta_command=0x%x", event.meta_command))
 
             local meta_parser = self[event.meta_command] or self.undef
             local bytes_read = meta_parser:read(file, event)
@@ -355,197 +355,197 @@ local event_parser = {
             return 1 + bytes_read
         end,
 
-        tostring = function(self, event)
-            local meta_parser = self[event.meta_command] or self..undef
-            return  int_to_string(event.meta_command, 1)
-                    .. meta_parser:tostring(event)
+        write = function(self, event, file)
+            local meta_parser = self[event.meta_command] or self.undef
+            return file:write(int_to_string(event.meta_command, 1))
+                    and meta_parser:write(event, file)
         end,
     },
 
-	[0xf8] = {
-		read = function(self, file, event)
-			event.common_name = "timing clock"
-			return 0
-		end,
-        tostring = function(self, event) end
-	},
+    [0xf8] = {
+        read = function(self, file, event)
+            event.common_name = "timing clock"
+            return 0
+        end,
+        write = function(self, event, file) end
+    },
 
-	[0xfa] = {
-		read = function(self, file, event)
-			event.common_name = "start current sequence"
-			return 0
-		end,
-        tostring = function(self, event) end
-	},
+    [0xfa] = {
+        read = function(self, file, event)
+            event.common_name = "start current sequence"
+            return 0
+        end,
+        write = function(self, event, file) end
+    },
 
-	[0xfb] = {
-		read = function(self, file, event)
-			event.common_name = "continue stopped sequence"
-			return 0
-		end,
-        tostring = function(self, event) end
-	},
+    [0xfb] = {
+        read = function(self, file, event)
+            event.common_name = "continue stopped sequence"
+            return 0
+        end,
+        write = function(self, event, file) end
+    },
 
-	[0xfc] = {
-		read = function(self, file, event)
-			event.common_name = "stop sequence"
-			return 0
-		end,
-        tostring = function(self, event) end
-	},
+    [0xfc] = {
+        read = function(self, file, event)
+            event.common_name = "stop sequence"
+            return 0
+        end,
+        write = function(self, event, file) end
+    },
 
-	[0x8] = {
-		read = function(self, file, event)
-			event.common_name = "note off"
-			event.note_number = string_to_int(file:read(1))
-			event.velocity = string_to_int(file:read(1))
-			return 2
-		end,
-		tostring = function(self, event)
-			return data_to_binary_string({
-				{1, event.note_number},
-				{1, event.velocity},
-			})
-		end
-	},
+    [0x8] = {
+        read = function(self, file, event)
+            event.common_name = "note off"
+            event.note_number = string_to_int(file:read(1))
+            event.velocity = string_to_int(file:read(1))
+            return 2
+        end,
+        write = function(self, event, file)
+            return file:write(data_to_binary_string({
+                {1, event.note_number},
+                {1, event.velocity},
+            }))
+        end
+    },
 
-	[0x9] = {
-		read = function(self, file, event)
-			event.common_name = "note on"
-			event.note_number = string_to_int(file:read(1))
-			event.velocity = string_to_int(file:read(1))
-			return 2
-		end,
-		tostring = function(self, event)
-			return data_to_binary_string({
-				{1, event.note_number},
-				{1, event.velocity},
-			})
-		end
-	},
+    [0x9] = {
+        read = function(self, file, event)
+            event.common_name = "note on"
+            event.note_number = string_to_int(file:read(1))
+            event.velocity = string_to_int(file:read(1))
+            return 2
+        end,
+        write = function(self, event, file)
+            return file:write(data_to_binary_string({
+                {1, event.note_number},
+                {1, event.velocity},
+            }))
+        end
+    },
 
-	[0xa] = {
-		read = function(self, file, event)
-			event.common_name = "key after-touch"
-			event.note_number = string_to_int(file:read(1))
-			event.velocity = string_to_int(file:read(1))
-			return 2
-		end,
-		tostring = function(self, event)
-			return data_to_binary_string({
-				{1, event.note_number},
-				{1, event.velocity},
-			})
-		end
-	},
+    [0xa] = {
+        read = function(self, file, event)
+            event.common_name = "key after-touch"
+            event.note_number = string_to_int(file:read(1))
+            event.velocity = string_to_int(file:read(1))
+            return 2
+        end,
+        write = function(self, event, file)
+            return file:write(data_to_binary_string({
+                {1, event.note_number},
+                {1, event.velocity},
+            }))
+        end
+    },
 
-	[0xb] = {
-		read = function(self, file, event)
-			event.common_name = "control change"
-			event.controller_num = string_to_int(file:read(1))
-			event.new_value = string_to_int(file:read(1))
-			return 2
-		end,
-		tostring = function(self, event)
-			return data_to_binary_string({
-				{1, event.controller_num},
-				{1, event.new_value},
-			})
-		end
-	},
+    [0xb] = {
+        read = function(self, file, event)
+            event.common_name = "control change"
+            event.controller_num = string_to_int(file:read(1))
+            event.new_value = string_to_int(file:read(1))
+            return 2
+        end,
+        write = function(self, event, file)
+            return file:write(data_to_binary_string({
+                {1, event.controller_num},
+                {1, event.new_value},
+            }))
+        end
+    },
 
-	[0xd] = {
-		read = function(self, file, event)
-			event.common_name = "program (patch) change"
-			event.program_num = string_to_int(file:read(1))
-			return 1
-		end,
-		tostring = function(self, event)
-			return int_to_string(event.program_num, 1)
-		end
-	},
+    [0xd] = {
+        read = function(self, file, event)
+            event.common_name = "program (patch) change"
+            event.program_num = string_to_int(file:read(1))
+            return 1
+        end,
+        write = function(self, event, file)
+            return file:write(int_to_string(event.program_num, 1))
+        end
+    },
 
-	[0xd] = {
-		read = function(self, file, event)
-			event.common_name = "channel after-touch"
-			event.channel_num = string_to_int(file:read(1))
-			return 1
-		end,
-		tostring = function(self, event)
-			return int_to_string(event.channel_num, 1)
-		end
-	},
+    [0xd] = {
+        read = function(self, file, event)
+            event.common_name = "channel after-touch"
+            event.channel_num = string_to_int(file:read(1))
+            return 1
+        end,
+        write = function(self, event, file)
+            return file:write(int_to_string(event.channel_num, 1))
+        end
+    },
 
-	[0xe] = {
-		read = function(self, file, event)
-			event.common_name = "pitch wheel change"
-			event.least_significant = string_to_int(file:read(1))
-			event.most_significant = string_to_int(file:read(1))
-			event.pitch = bit.lshift(bit.band(event.most_significant, 0x7f), 7)
-					+ bit.band(event.least_significant, 0x7f)
-			return 2
-		end,
-		tostring = function(self, event)
-			event.payload = data_to_binary_string({
-				{1, event.least_significant},
-				{1, event.most_significant},
-			})
-		end
-	},
+    [0xe] = {
+        read = function(self, file, event)
+            event.common_name = "pitch wheel change"
+            event.least_significant = string_to_int(file:read(1))
+            event.most_significant = string_to_int(file:read(1))
+            event.pitch = bit.lshift(bit.band(event.most_significant, 0x7f), 7)
+                    + bit.band(event.least_significant, 0x7f)
+            return 2
+        end,
+        write = function(self, event, file)
+            return file:write(data_to_binary_string({
+                {1, event.least_significant},
+                {1, event.most_significant},
+            }))
+        end
+    },
 
-	undef = {
-		read = function(self, file, event)
-		event.common_name = string.format(
-				"Unrecognized command: 0x%x", event.command)
-			return text_event_read(file, event)
-		end,
-		tostring = function(self, event)
-			return text_event_tostring(event)
-		end
-	},
+    undef = {
+        read = function(self, file, event)
+        event.common_name = string.format(
+                "Unrecognized command: 0x%x", event.command)
+            return text_event_read(file, event)
+        end,
+        write = function(self, event, file)
+            return file:write(text_event_write(event, file))
+        end
+    },
 
     read = function(self, file, event)
 
-		-- Read variable length delta time field.
-		local delta_bytes, delta_time = read_var_len_value(file)
-		event.delta_time = delta_time
+        -- Read variable length delta time field.
+        local delta_bytes, delta_time = read_var_len_value(file)
+        event.delta_time = delta_time
 
         event.command = string_to_int(file:read(1))
         local ctype = bit.rshift(event.command, 4)
 
-		--print(string.format("command=0x%x", event.command))
+        --print(string.format("command=0x%x", event.command))
 
         local command_parser
-		if self[event.command] ~= nil then
-			command_parser = self[event.command]
-		elseif self[ctype] ~= nil then
-			event.ctype = ctype
-			event.channel = bit.band(event.command, 0x0f)
-			command_parser = self[ctype]
-		else
-			command_parser = self.undef
-		end
+        if self[event.command] ~= nil then
+            command_parser = self[event.command]
+        elseif self[ctype] ~= nil then
+            event.ctype = ctype
+            event.channel = bit.band(event.command, 0x0f)
+            command_parser = self[ctype]
+        else
+            command_parser = self.undef
+        end
         local bytes_read = command_parser:read(file, event)
 
         return delta_bytes + 1 + bytes_read
     end,
 
-    tostring = function(self, event)
+    write = function(self, event, file)
         local command_parser = self[event.command]
                 or self[event.ctype]
                 or self.undef
-        return value_to_var_len_encoding(event.delta_time)
-				.. int_to_string(event.command, 1)
-                .. command_parser:tostring(event)
+        return file:write(value_to_var_len_encoding(event.delta_time)
+                .. int_to_string(event.command, 1))
+                and command_parser:write(event, file)
     end,
 }
 
 --- Open a .mid file.
 local function read(path)
+
     local file = io.open(path)
 
     -- Perform file IO in protected block.
-    --
     local status, err_or_data = pcall(function()
 
         -- Read .mid header.
@@ -567,7 +567,7 @@ local function read(path)
             --print("reading track "..(#data.tracks + 1))
 
             -- Start a new track.
-            local track = process_track_header(file)
+            local track = read_track_header_and_size(file)
             if track == nil then
                 return data
             end
@@ -581,8 +581,8 @@ local function read(path)
                 --print("reading event "..(#events + 1))
                 --print("bytes_remain="..bytes_remain)
 
-				local event = {}
-				local bytes_read = event_parser:read(file, event)
+                local event = {}
+                local bytes_read = event_parser:read(file, event)
 
                 -- Add event to list for this track.
                 --print("event:")
@@ -617,8 +617,61 @@ local function read(path)
     end
 end
 
---- Write a .mid file.
-local function writen(data)
+--- Write a .mid file. Note that you may mock the file parameter using a
+--mid.string_io() and then recover the data from string_io.data.
+local function write(data, file)
+
+    --- Check that result is true or else throw error(msg).
+    local function check_result(result, msg)
+        if result ~= true then
+            error(msg)
+        end
+    end
+
+    -- Write header.
+    check_result(file:write(HEADER
+            ..int_to_string(6, 4)
+            ..int_to_string(data.track_mode, 2)
+            ..int_to_string(data.num_tracks, 2)
+            ..int_to_string(data.ticks_per_qrtr, 2)),
+            "Failed writing header")
+
+    -- Write tracks.
+    for _,track in ipairs(data.tracks) do
+
+        -- Write track header and size.
+        check_result(file:write(TRACK_HEADER
+                ..int_to_string(track.size, 4)),
+                "Failed writing track header and size")
+
+        -- Write events.
+        for _,event in ipairs(track.events) do
+            check_result(event_parser:write(event, file),
+                    "Failed writing event")
+        end
+
+    end
+
+end
+
+--- A file interface backed by a string.
+local function string_io(initial_data)
+    return {
+        data = initial_data or "",
+        pointer = 1,
+        read = function(self, size)
+            local tmp = self.pointer
+            self.pointer = self.pointer + size
+            local readval = self.data.sub(self.data, tmp, self.pointer - 1)
+            --print("i="..tmp..", j="..self.pointer..", size="..size
+            --        ..", readval:len()="..readval:len())
+            return readval
+        end,
+        write = function(self, value)
+            self.data = self.data .. value
+            return true
+        end,
+    }
 end
 
 --- Run tests.
@@ -640,22 +693,6 @@ local function _test()
         end
     end
 
-    --- Create a mocked file from data.
-    local function mock_file(data)
-        return {
-            data = data,
-            pointer = 1,
-            read = function(self, size)
-                local tmp = self.pointer
-                self.pointer = self.pointer + size
-                local readval = self.data.sub(self.data, tmp, self.pointer - 1)
-                --print("i="..tmp..", j="..self.pointer..", size="..size
-                --        ..", readval:len()="..readval:len())
-                return readval
-            end
-        }
-    end
-
     -- Test variable size fields.
     check_test(function()
 
@@ -663,7 +700,7 @@ local function _test()
         local value = 0
         local binary = value_to_var_len_encoding(value)
         assert_equals(1, binary:len())
-        local size, value_recovered = read_var_len_value(mock_file(binary))
+        local size, value_recovered = read_var_len_value(string_io(binary))
         assert_equals(binary:len(), size)
         assert_equals(value, value_recovered)
 
@@ -673,7 +710,7 @@ local function _test()
             local value = bit.lshift(1, 7 * i) - 1
             local binary = value_to_var_len_encoding(value)
             assert_equals(i, binary:len())
-            local size, value_recovered = read_var_len_value(mock_file(binary))
+            local size, value_recovered = read_var_len_value(string_io(binary))
             assert_equals(binary:len(), size)
             assert_equals(value, value_recovered)
 
@@ -681,7 +718,7 @@ local function _test()
             local value = bit.lshift(1, 7 * i)
             local binary = value_to_var_len_encoding(value)
             assert_equals(i + 1, binary:len())
-            local size, value_recovered = read_var_len_value(mock_file(binary))
+            local size, value_recovered = read_var_len_value(string_io(binary))
             assert_equals(binary:len(), size)
             assert_equals(value, value_recovered)
         end
@@ -690,7 +727,7 @@ local function _test()
         local value = bit.lshift(1, 7 * 4) - 1
         local binary = value_to_var_len_encoding(value)
         assert_equals(4, binary:len())
-        local size, value_recovered = read_var_len_value(mock_file(binary))
+        local size, value_recovered = read_var_len_value(string_io(binary))
         assert_equals(binary:len(), size)
         assert_equals(value, value_recovered)
     end)
@@ -698,61 +735,67 @@ local function _test()
     -- Test event parsers.
     check_test(function()
 
-		-- Create a simple event.
+        -- Create a simple event.
         local event = {}
-		event.delta_time = 1021
+        event.delta_time = 1021
         event.command = 0xff
         event.meta_command = 0x2f
         event.data = 0
         print("test event:")
         print(event)
 
-		-- Serialize the simple event.
-        local binary = event_parser:tostring(event)
+        -- Serialize the simple event.
+        local file = string_io()
+        local result = event_parser:write(event, file)
         local from_binary = {}
-        event_parser:read(mock_file(binary), from_binary)
+        event_parser:read(string_io(file.data), from_binary)
         print("from_binary:")
         print(from_binary)
 
-		-- Check equality.
-		for key, value in pairs(event) do
-			assert_equals(value, from_binary[key])
-		end
+        -- Check equality.
+        for key, value in pairs(event) do
+            assert_equals(value, from_binary[key])
+        end
 
-		-- Serialize and read again since we only simulated essential
-		-- fields.
-        local binary = event_parser:tostring(from_binary)
+        -- Serialize and read again since we only simulated essential
+        -- fields.
+        local file = string_io()
+        local result = event_parser:write(from_binary, file)
         local from_binary_again = {}
-        event_parser:read(mock_file(binary), from_binary_again)
+        event_parser:read(string_io(file.data), from_binary_again)
 
-		-- Check equality.
-		for key, value in pairs(from_binary) do
-			assert_equals(value, from_binary_again[key])
-		end
+        -- Check equality.
+        for key, value in pairs(from_binary) do
+            assert_equals(value, from_binary_again[key])
+        end
 
-		-- See if we have the midi folder.
-		local data_dir = "midi"
-		local stat, _ = pcall(function() lfs.dir(data_dir) end)
-		if stat then
+        -- See if we have the midi folder.
+        local data_dir = "midi"
+        local stat, _ = pcall(function() lfs.dir(data_dir) end)
+        if stat then
 
-			-- Get a random file from midi.
-			mid_files = {}
-			for filename in lfs.dir(data_dir) do
-				if filename:lower():find(".mid") ~= nil then
-					table.insert(mid_files, filename)
-				end
-			end
-			mid_file = mid_files[math.random(1, #mid_files)]
-			print("Using .mid file: "..mid_file)
+            -- Get a random file from midi.
+            mid_files = {}
+            for filename in lfs.dir(data_dir) do
+                if filename:lower():find(".mid") ~= nil then
+                    table.insert(mid_files, filename)
+                end
+            end
+            local mid_file = data_dir.."/"
+                    ..mid_files[math.random(1, #mid_files)]
+            print("Using .mid file: "..mid_file)
 
-			-- Read and tostring the file.
-			data1 = mid.read(data_dir.."/"..mid_file)
-			print(data1.num_tracks)
-			for i, track in ipairs(data1.tracks) do
-				print("Track "..i.." has "..#track.events.." events.")
-			end
+            -- Read and write the file.
+            local data1 = mid.read(mid_file)
+            for i, track in ipairs(data1.tracks) do
+                print("Track "..i.." has "..#track.events.." events.")
+            end
+            local file1 = string_io()
+            write(data1, file1)
+            local mid_file_bin = io.open(mid_file):read(1024*1024*128)
+            assert_equals(mid_file_bin, file1.data)
 
-		end
+        end
 
     end)
 end
@@ -765,6 +808,7 @@ return {
     MODE_MULTI_ASYNCH = MODE_MULTI_ASYNCH,
     read = read,
     write = write,
+    string_io = string_io,
     _test = _test,
 }
 
