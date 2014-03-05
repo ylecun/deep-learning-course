@@ -3,11 +3,21 @@
 --
 -- An example usage is:
 --
+--   io = requie "io"
 --   mid = require "mid"
---   data = mid.open(PATH_TO_MID_FILE)
---   -- From here, it's possible to access all members of the MID data from the
---   -- fields of 'data'. It's best to explore in a lua REPL.
 --
+--   -- Read .mid file.
+--   data = mid.read(io.open(PATH_TO_MID_FILE))
+--   -- Write .mid file.
+--   mid.write(data, open("my_file.mid")
+--
+-- N.B. explore the fields of the returned MID data structure in a Lua
+-- REPL. It contains a table of tracks and a table of MIDI events for
+-- each track.
+--
+-- See the tests in mid._test() for example usage.
+--
+-- (c) 2014 Brandon L. Reiss
 --]
 require "bit"
 require "io"
@@ -541,80 +551,66 @@ local event_parser = {
 }
 
 --- Open a .mid file.
-local function read(path)
+local function read(file)
 
-    local file = io.open(path)
+    -- Read .mid header.
+    local header = file:read(4)
+    if header ~= HEADER then
+        error({msg=string.format("MIDI file header(%s) != expected %s",
+                header, HEADER)})
+    end
+    local header_size = get_len_check_expected(file, 4, 6)
 
-    -- Perform file IO in protected block.
-    local status, err_or_data = pcall(function()
+    local data = {}
+    data.track_mode = string_to_int(file:read(2))
+    data.num_tracks = string_to_int(file:read(2))
+    data.ticks_per_qrtr = string_to_int(file:read(2))
+    data.tracks = {}
 
-        -- Read .mid header.
-        local header = file:read(4)
-        if header ~= HEADER then
-            error({msg=string.format("MIDI file header(%s) != expected %s",
-                    header, HEADER)})
+    -- Read tracks until EOF.
+    repeat
+        --print("reading track "..(#data.tracks + 1))
+
+        -- Start a new track.
+        local track = read_track_header_and_size(file)
+        if track == nil then
+            return data
         end
-        local header_size = get_len_check_expected(file, 4, 6)
+        --print("track:")
+        --print(track)
 
-        local data = {}
-        data.track_mode = string_to_int(file:read(2))
-        data.num_tracks = string_to_int(file:read(2))
-        data.ticks_per_qrtr = string_to_int(file:read(2))
-        data.tracks = {}
-
-        -- Read tracks until EOF.
+        -- Read remainder of the track (the events).
+        local bytes_remain = track.size
+        local events = {}
         repeat
-            --print("reading track "..(#data.tracks + 1))
+            --print("reading event "..(#events + 1))
+            --print("bytes_remain="..bytes_remain)
 
-            -- Start a new track.
-            local track = read_track_header_and_size(file)
-            if track == nil then
-                return data
+            local event = {}
+            local bytes_read = event_parser:read(file, event)
+
+            -- Add event to list for this track.
+            --print("event:")
+            --print(event)
+            table.insert(events, event)
+
+            -- See if this track is read.
+            bytes_remain = bytes_remain - bytes_read
+            if bytes_remain == 0 then
+                --print("track "..(#data.tracks + 1).." completed")
+                break
+            elseif bytes_remain < 0 then
+                error({msg=string.format("Track size is %d but read %d bytes",
+                        track.size, track.size - bytes_remain)})
             end
-            --print("track:")
-            --print(track)
-
-            -- Read remainder of the track (the events).
-            local bytes_remain = track.size
-            local events = {}
-            repeat
-                --print("reading event "..(#events + 1))
-                --print("bytes_remain="..bytes_remain)
-
-                local event = {}
-                local bytes_read = event_parser:read(file, event)
-
-                -- Add event to list for this track.
-                --print("event:")
-                --print(event)
-                table.insert(events, event)
-
-                -- See if this track is read.
-                bytes_remain = bytes_remain - bytes_read
-                if bytes_remain == 0 then
-                    --print("track "..(#data.tracks + 1).." completed")
-                    break
-                elseif bytes_remain < 0 then
-                    error({msg=string.format("Track size is %d but read %d bytes",
-                            track.size, track.size - bytes_remain)})
-                end
-
-            until not true
-
-            track.events = events
-            table.insert(data.tracks, track)
 
         until not true
 
-    end)
+        track.events = events
+        table.insert(data.tracks, track)
 
-    file:close()
+    until not true
 
-    if not status then
-        error(err_or_data.msg)
-    else
-        return err_or_data
-    end
 end
 
 --- Write a .mid file. Note that you may mock the file parameter using a
@@ -781,19 +777,21 @@ local function _test()
                     table.insert(mid_files, filename)
                 end
             end
-            local mid_file = data_dir.."/"
+            local file_path = data_dir.."/"
                     ..mid_files[math.random(1, #mid_files)]
-            print("Using .mid file: "..mid_file)
+            print("Using .mid file: "..file_path)
 
             -- Read and write the file.
-            local data1 = mid.read(mid_file)
-            for i, track in ipairs(data1.tracks) do
+            local data = mid.read(io.open(file_path))
+            for i, track in ipairs(data.tracks) do
                 print("Track "..i.." has "..#track.events.." events.")
             end
-            local file1 = string_io()
-            write(data1, file1)
-            local mid_file_bin = io.open(mid_file):read(1024*1024*128)
-            assert_equals(mid_file_bin, file1.data)
+            local mock_file = string_io()
+            write(data, mock_file)
+
+            -- Check that the written file matches exactly the source.
+            local mid_file_bin = io.open(file_path):read(1024*1024*128)
+            assert_equals(mid_file_bin, mock_file.data)
 
         end
 
