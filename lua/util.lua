@@ -3,6 +3,9 @@
 --
 -- (c) 2014 Brandon L. Reiss
 --]
+require "math"
+
+require "test_util"
 
 --- Convert a string of binary data to an integer.
 local function string_to_int(str)
@@ -70,10 +73,73 @@ local function string_io(initial_data)
     }
 end
 
+--- Binary search a sorted table. Returns positive index when the value is in
+-- the sorted table and a negative index whose negated value is the insertion
+-- index to maintain the sorted state of the table.
+local function binary_search(sorted_values, cmd)
+    -- Emtpy table?
+    if #sorted_values == 0 then
+        return -1
+    end
+
+    local i, j = 1, #sorted_values
+    repeat
+        -- Check midpoint.
+        local mid = math.floor((i + j) / 2)
+        local ins = mid
+        if sorted_values[mid] == cmd then
+            return mid
+        elseif sorted_values[mid] > cmd then
+            j = mid - 1
+        else
+            i = mid + 1
+            ins = i
+        end
+        -- See if not found.
+        if i > j then
+            return -ins
+        end
+    until not true
+end
+
+local function _test()
+
+    local assert_equals = test_util.assert_equals
+    local check_test = test_util.check_test
+
+    -- Test binary_search.
+    check_test(function()
+        -- Emtpy table test.
+        local values = {}
+        binary_search(values, 100)
+
+        -- Some ints.
+        local values = {0, 7, 13, 22, 101, 230}
+        for i = -5,235 do
+            -- Simple linear search.
+            local expected_idx
+            for idx, each in ipairs(values) do
+                expected_idx = -idx
+                if i == each then
+                    expected_idx = idx
+                    break
+                elseif i < each then
+                    break
+                end
+                expected_idx = -idx - 1
+            end
+            local actual_idx = binary_search(values, i)
+            assert_equals(expected_idx, actual_idx)
+        end
+    end)
+end
+
 util = {
     string_to_int = string_to_int,
     int_to_string = int_to_string,
     data_to_binary_string = data_to_binary_string,
     string_io = string_io,
+    binary_search = binary_search,
+    _test = _test,
 }
 return util

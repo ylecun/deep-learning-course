@@ -117,7 +117,7 @@ end
 
 --- Convert a text-only event to a binary string.
 local function text_event_write(event, file)
-    return file:write(encode_var_len_value(event.len) .. event.text)
+    return file:write(encode_var_len_value(event.len)..event.text)
 end
 
 --- The event parser.
@@ -465,7 +465,7 @@ local event_parser = {
             return text_event_read(file, event)
         end,
         write = function(self, event, file)
-            return file:write(text_event_write(event, file))
+            return text_event_write(event, file)
         end
     },
 

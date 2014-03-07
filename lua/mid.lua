@@ -33,6 +33,8 @@ local event_parser = mid_event_parser.event_parser
 
 local string_to_int = util.string_to_int
 local int_to_string = util.int_to_string
+local binary_search = util.binary_search
+local string_io = util.string_io
 
 --- The MIDI header magic numbers.
 local HEADER, TRACK_HEADER = "MThd", "MTrk"
@@ -147,10 +149,57 @@ local function write(data, file)
 
 end
 
+--- Filter track events based on type codes.
+--  Event filter codes are of the form:
+--      code = {code, ...},
+--      ctype = {code, ...},
+--      meta = {code, ...},
+--  where 'codes' are standard command codes, 'meta' are meta commands, and
+--  'ctypes' are channel-based codes. See COMMAND_CODES for available types.
+local function filter_track(track, code, ctype, meta)
+
+    -- Sort filtered types.
+    local code = code or {}
+    local ctype = ctype or {}
+    local meta = meta or {}
+    table.sort(code)
+    table.sort(ctype)
+    table.sort(meta)
+
+    local filtered_track = {}
+    for k,v in pairs(track) do
+        filtered_track[k] = v
+    end
+    local size = track.size
+    local filtered_events = {}
+
+    for _, event in pairs(track.events) do
+        -- Determine command type and then check filters.
+        local add_event
+        if event.ctype ~= nil then
+            add_event = binary_search(ctype, event.ctype)
+        elseif event.meta_command ~= nil then
+            add_event = binary_search(meta, event.meta_command) > 0
+        else
+            add_event = binary_search(code, event.command) > 0
+        end
+        if add_event then
+            table.insert(filtered_events, event)
+        else
+            local string_io = string_io()
+            event_parser:write(event, string_io)
+            size = size - string.len(string_io.data)
+        end
+    end
+
+    filtered_track.events = filtered_events
+    filtered_track.size = size
+    return filtered_track
+end
+
 --- Run tests.
 local function _test()
 
-    local string_io = util.string_io
     local assert_equals = test_util.assert_equals
     local check_test = test_util.check_test
 
@@ -169,21 +218,23 @@ local function _test()
                     table.insert(mid_files, filename)
                 end
             end
-            local file_path = data_dir.."/"
-                    ..mid_files[math.random(1, #mid_files)]
-            print("Using .mid file: "..file_path)
 
-            -- Read and write the file.
-            local data = mid.read(io.open(file_path))
-            for i, track in ipairs(data.tracks) do
-                print("Track "..i.." has "..#track.events.." events.")
+            for _,filename in ipairs(mid_files) do
+                local file_path = data_dir.."/"..filename
+                print("Using .mid file: "..file_path)
+
+                -- Read and write the file.
+                local data = mid.read(io.open(file_path))
+                for i, track in ipairs(data.tracks) do
+                    print("Track "..i.." has "..#track.events.." events.")
+                end
+                local mock_file = string_io()
+                write(data, mock_file)
+
+                -- Check that the written file matches exactly the source.
+                local mid_file_bin = io.open(file_path):read(1024*1024*128)
+                assert_equals(mid_file_bin, mock_file.data)
             end
-            local mock_file = string_io()
-            write(data, mock_file)
-
-            -- Check that the written file matches exactly the source.
-            local mid_file_bin = io.open(file_path):read(1024*1024*128)
-            assert_equals(mid_file_bin, mock_file.data)
 
         end
 
@@ -199,6 +250,7 @@ mid = {
     COMMAND_CODES = COMMAND_CODES,
     read = read,
     write = write,
+    filter_track = filter_track,
     _test = _test,
 }
 return mid
