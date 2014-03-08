@@ -17,8 +17,8 @@ event = {}
 --- The command type names.
 event.CODES = {
     -- Meta commands are subtypes of the meta code.
-    meta = 0xff,
-    meta_codes = {
+    meta_prefix = 0xff,
+    meta = {
         set_trk_seq_num = 0x00,
         text = 0x01,
         text_copyright = 0x02,
@@ -34,10 +34,13 @@ event.CODES = {
         seq_specific = 0x7f,
     },
 
-    timing_clock = 0xf8,
-    start_cur_seq = 0xfa,
-    cont_stop_seq = 0xfb,
-    stop_seq = 0xfc,
+    -- System codes are at the top level and have no channel.
+    system = {
+        timing_clock = 0xf8,
+        start_cur_seq = 0xfa,
+        cont_stop_seq = 0xfb,
+        stop_seq = 0xfc,
+    },
 
     -- Commands with channel nibble as lower 4 bits.
     ctype = {
@@ -129,9 +132,9 @@ end
 --- The event parser.
 event.parser = {
 
-    [CODES.meta] = {
+    [CODES.meta_prefix] = {
 
-        [CODES.meta_codes.set_trk_seq_num] = {
+        [CODES.meta.set_trk_seq_num] = {
             read = function(self, file, event)
                 event.common_name = "meta - set track sequence number"
                 event.len = get_len_check_expected(file, 1, 2)
@@ -146,7 +149,7 @@ event.parser = {
             end
         },
 
-        [CODES.meta_codes.text] = {
+        [CODES.meta.text] = {
             read = function(self, file, event)
                 event.common_name = "meta - text"
                 return text_event_read(file, event)
@@ -156,7 +159,7 @@ event.parser = {
             end
         },
 
-        [CODES.meta_codes.text_copyright] = {
+        [CODES.meta.text_copyright] = {
             read = function(self, file, event)
                 event.common_name = "meta - text copyright"
                 return text_event_read(file, event)
@@ -166,7 +169,7 @@ event.parser = {
             end
         },
 
-        [CODES.meta_codes.seq_track_name] = {
+        [CODES.meta.seq_track_name] = {
 
             read = function(self, file, event)
                 event.common_name = "meta - seq/track name"
@@ -177,7 +180,7 @@ event.parser = {
             end
         },
 
-        [CODES.meta_codes.track_instrument_name] = {
+        [CODES.meta.track_instrument_name] = {
             read = function(self, file, event)
                 event.common_name = "meta - track instrument name"
                 return text_event_read(file, event)
@@ -187,7 +190,7 @@ event.parser = {
             end
         },
 
-        [CODES.meta_codes.lyric] = {
+        [CODES.meta.lyric] = {
             read = function(self, file, event)
                 event.common_name = "meta - lyric"
                 return text_event_read(file, event)
@@ -197,7 +200,7 @@ event.parser = {
             end
         },
 
-        [CODES.meta_codes.marker] = {
+        [CODES.meta.marker] = {
             read = function(self, file, event)
                 event.common_name = "meta - marker"
                 return text_event_read(file, event)
@@ -207,7 +210,7 @@ event.parser = {
             end
         },
 
-        [CODES.meta_codes.cue_point] = {
+        [CODES.meta.cue_point] = {
             read = function(self, file, event)
                 event.common_name = "meta - cue point"
                 return text_event_read(file, event)
@@ -217,7 +220,7 @@ event.parser = {
             end
         },
 
-        [CODES.meta_codes.track_end] = {
+        [CODES.meta.track_end] = {
             read = function(self, file, event)
                 event.common_name = "meta - track end"
                 event.data = string_to_int(file:read(1))
@@ -233,7 +236,7 @@ event.parser = {
             end
         },
 
-        [CODES.meta_codes.set_tempo] = {
+        [CODES.meta.set_tempo] = {
             read = function(self, file, event)
                 event.common_name = "meta - set tempo"
                 event.len = get_len_check_expected(file, 1, 3)
@@ -248,7 +251,7 @@ event.parser = {
             end
         },
 
-        [CODES.meta_codes.time_sig] = {
+        [CODES.meta.time_sig] = {
             read = function(self, file, event)
                 event.common_name = "meta - time signature"
                 event.len = get_len_check_expected(file, 1, 4)
@@ -269,7 +272,7 @@ event.parser = {
             end
         },
 
-        [CODES.meta_codes.key_sig] = {
+        [CODES.meta.key_sig] = {
             read = function(self, file, event)
                 event.common_name = "meta - key signature"
                 event.len = get_len_check_expected(file, 1, 2)
@@ -294,7 +297,7 @@ event.parser = {
             end
         },
 
-        [CODES.meta_codes.seq_specific] = {
+        [CODES.meta.seq_specific] = {
             read = function(self, file, event)
                 event.common_name = "meta - sequencer specific"
                 return text_event_read(file, event)
@@ -307,7 +310,7 @@ event.parser = {
         undef = {
             read = function(self, file, event)
                 event.common_name = string.format(
-                        "Unrecognized meta-command: 0x%x", event.meta_command)
+                        "Unrecognized meta-command: 0x%x", event.meta)
                 return text_event_read(file, event)
             end,
             write = function(self, event, file)
@@ -316,50 +319,50 @@ event.parser = {
         },
 
         read = function(self, file, event)
-            event.meta_command = string_to_int(file:read(1))
+            event.meta = string_to_int(file:read(1))
 
-            --print(string.format("meta_command=0x%x", event.meta_command))
+            --print(string.format("meta=0x%x", event.meta))
 
-            local meta_parser = self[event.meta_command] or self.undef
+            local meta_parser = self[event.meta] or self.undef
             local bytes_read = meta_parser:read(file, event)
 
             return 1 + bytes_read
         end,
 
         write = function(self, event, file)
-            local meta_parser = self[event.meta_command] or self.undef
-            return file:write(int_to_string(event.meta_command, 1))
+            local meta_parser = self[event.meta] or self.undef
+            return file:write(int_to_string(event.meta, 1))
                     and meta_parser:write(event, file)
         end,
     },
 
-    [CODES.timing_clock] = {
+    [CODES.system.timing_clock] = {
         read = function(self, file, event)
-            event.common_name = "timing clock"
+            event.common_name = "system - timing clock"
             return 0
         end,
         write = function(self, event, file) end
     },
 
-    [CODES.start_cur_seq] = {
+    [CODES.system.start_cur_seq] = {
         read = function(self, file, event)
-            event.common_name = "start current sequence"
+            event.common_name = "system - start current sequence"
             return 0
         end,
         write = function(self, event, file) end
     },
 
-    [CODES.cont_stop_seq] = {
+    [CODES.system.cont_stop_seq] = {
         read = function(self, file, event)
-            event.common_name = "continue stopped sequence"
+            event.common_name = "system - continue stopped sequence"
             return 0
         end,
         write = function(self, event, file) end
     },
 
-    [CODES.stop_seq] = {
+    [CODES.system.stop_seq] = {
         read = function(self, file, event)
-            event.common_name = "stop sequence"
+            event.common_name = "system - stop sequence"
             return 0
         end,
         write = function(self, event, file) end
@@ -565,7 +568,7 @@ function event._test()
         local event = {}
         event.delta_time = 1021
         event.command = 0xff
-        event.meta_command = 0x2f
+        event.meta = 0x2f
         event.data = 0
         print("test event:")
         print(event)

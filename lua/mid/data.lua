@@ -138,18 +138,17 @@ end
 
 --- Filter track events based on type codes.
 --  Event filter codes are of the form:
---      code = {code, ...},
---      ctype = {code, ...},
---      meta = {code, ...},
---  where 'codes' are standard command codes, 'meta' are meta commands, and
---  'ctypes' are channel-based codes. See CODES for available types.
-function data.filter_track(track, code, ctype, meta)
+--      system = {code, ...}
+--      ctype = {code, ...}
+--      meta = {code, ...}
+--  See CODES for available types.
+function data.filter_track(track, system, ctype, meta)
 
     -- Sort filtered types.
-    local code = code or {}
+    local system = system or {}
     local ctype = ctype or {}
     local meta = meta or {}
-    table.sort(code)
+    table.sort(system)
     table.sort(ctype)
     table.sort(meta)
 
@@ -165,10 +164,10 @@ function data.filter_track(track, code, ctype, meta)
         local add_event
         if event.ctype ~= nil then
             add_event = binary_search(ctype, event.ctype)
-        elseif event.meta_command ~= nil then
-            add_event = binary_search(meta, event.meta_command) > 0
+        elseif event.meta ~= nil then
+            add_event = binary_search(meta, event.meta) > 0
         else
-            add_event = binary_search(code, event.command) > 0
+            add_event = binary_search(system, event.command) > 0
         end
         if add_event then
             table.insert(filtered_events, event)
