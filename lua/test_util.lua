@@ -4,8 +4,10 @@
 -- (c) 2014 Brandon L. Reiss
 --]
 
+test_util = {}
+
 --- Simple equality assertion. Types must be comparable with ~=.
-local function assert_equals(expected, actual)
+function test_util.assert_equals(expected, actual)
     if actual ~= expected then
         error("value expected="..tostring(expected)
                 ..", actual="..tostring(actual))
@@ -13,7 +15,7 @@ local function assert_equals(expected, actual)
 end
 
 --- Test wrapper that catches errors and prints stack traces.
-local function check_test(test_func)
+function test_util.check_test(test_func)
     status, err = pcall(test_func)
     if status == false then
         print("test error:")
@@ -22,8 +24,4 @@ local function check_test(test_func)
     end
 end
 
-test_util = {
-    assert_equals = assert_equals,
-    check_test = check_test,
-}
 return test_util

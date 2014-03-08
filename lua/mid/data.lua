@@ -1,55 +1,42 @@
 --[
--- Lua library for reading and writing MIDI (.mid) files.
---
--- An example usage is:
---
---   io = requie "io"
---   mid = require "mid"
---
---   -- Read .mid file.
---   data = mid.read(io.open(PATH_TO_MID_FILE))
---   -- Write .mid file.
---   mid.write(data, open("my_file.mid")
---
--- N.B. explore the fields of the returned MID data structure in a Lua
--- REPL. It contains a table of tracks and a table of MIDI events for
--- each track.
---
--- See the tests in mid._test() for example usage.
+-- Function to manipulate MID data.
 --
 -- (c) 2014 Brandon L. Reiss
 --]
-require "io"
+
 require "lfs"
-require "math"
 
-require "mid_event_parser"
-require "test_util"
 require "util"
+require "test_util"
+require "mid/event"
 
-local COMMAND_CODES = mid_event_parser.COMMAND_CODES
-local get_len_check_expected = mid_event_parser.get_len_check_expected
-local event_parser = mid_event_parser.event_parser
+local get_len_check_expected = event.get_len_check_expected
 
 local string_to_int = util.string_to_int
 local int_to_string = util.int_to_string
-local binary_search = util.binary_search
 local string_io = util.string_io
 
---- The MIDI header magic numbers.
-local HEADER, TRACK_HEADER = "MThd", "MTrk"
+local event_parser = event.parser
 
---- MIDI file modes.
-local MODE_SINGLE_TRACK, MODE_MULTI_SYNCH, MODE_MULTI_ASYNCH = 0, 1, 2
+local data = {
+    -- The MIDI header magic numbers.
+    FILE_HEADER = "MThd",
+    TRACK_HEADER = "MTrk",
+    -- Track modes.
+    MODE_SINGLE_TRACK = 0,
+    MODE_MULTI_SYNCH = 1,
+    MODE_MULTI_ASYNCH = 2,
+}
+local FILE_HEADER, TRACK_HEADER = data.FILE_HEADER, data.TRACK_HEADER
 
 --- Open a .mid file.
-local function read(file)
+function data.read(file)
 
     -- Read .mid header.
     local header = file:read(4)
-    if header ~= HEADER then
+    if header ~= FILE_HEADER then
         error({msg=string.format("MIDI file header(%s) != expected %s",
-                header, HEADER)})
+                header, FILE_HEADER)})
     end
     local header_size = get_len_check_expected(file, 4, 6)
 
@@ -113,8 +100,8 @@ local function read(file)
 end
 
 --- Write a .mid file. Note that you may mock the file parameter using a
---mid.string_io() and then recover the data from string_io.data.
-local function write(data, file)
+--string_io() and then recover the data from string_io.data.
+function data.write(data, file)
 
     --- Check that result is true or else throw error(msg).
     local function check_result(result, msg)
@@ -124,7 +111,7 @@ local function write(data, file)
     end
 
     -- Write header.
-    check_result(file:write(HEADER
+    check_result(file:write(FILE_HEADER
             ..int_to_string(6, 4)
             ..int_to_string(data.track_mode, 2)
             ..int_to_string(data.num_tracks, 2)
@@ -155,8 +142,8 @@ end
 --      ctype = {code, ...},
 --      meta = {code, ...},
 --  where 'codes' are standard command codes, 'meta' are meta commands, and
---  'ctypes' are channel-based codes. See COMMAND_CODES for available types.
-local function filter_track(track, code, ctype, meta)
+--  'ctypes' are channel-based codes. See CODES for available types.
+function data.filter_track(track, code, ctype, meta)
 
     -- Sort filtered types.
     local code = code or {}
@@ -198,7 +185,7 @@ local function filter_track(track, code, ctype, meta)
 end
 
 --- Run tests.
-local function _test()
+function data._test()
 
     local assert_equals = test_util.assert_equals
     local check_test = test_util.check_test
@@ -207,7 +194,7 @@ local function _test()
     check_test(function()
 
         -- See if we have the midi folder.
-        local data_dir = "midi"
+        local data_dir = "../midi"
         local stat, _ = pcall(function() lfs.dir(data_dir) end)
         if stat then
 
@@ -224,33 +211,24 @@ local function _test()
                 print("Using .mid file: "..file_path)
 
                 -- Read and write the file.
-                local data = mid.read(io.open(file_path))
-                for i, track in ipairs(data.tracks) do
+                local middata = data.read(io.open(file_path))
+                for i, track in ipairs(middata.tracks) do
                     print("Track "..i.." has "..#track.events.." events.")
                 end
                 local mock_file = string_io()
-                write(data, mock_file)
+                data.write(middata, mock_file)
 
                 -- Check that the written file matches exactly the source.
                 local mid_file_bin = io.open(file_path):read(1024*1024*128)
                 assert_equals(mid_file_bin, mock_file.data)
             end
 
+        else
+            error(data_dir.." not found")
         end
 
     end)
 end
 
-mid = {
-    HEADER = HEADER,
-    TRACK_HEADER = TRACK_HEADER,
-    MODE_SINGLE_TRACK = MODE_SINGLE_TRACK,
-    MODE_MULTI_SYNCH = MODE_MULTI_SYNCH,
-    MODE_MULTI_ASYNCH = MODE_MULTI_ASYNCH,
-    COMMAND_CODES = COMMAND_CODES,
-    read = read,
-    write = write,
-    filter_track = filter_track,
-    _test = _test,
-}
-return mid
+return data
+

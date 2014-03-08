@@ -7,8 +7,10 @@ require "math"
 
 require "test_util"
 
+util = {}
+
 --- Convert a string of binary data to an integer.
-local function string_to_int(str)
+function util.string_to_int(str)
     local num = 0
     for idx = 1,#str do
         shift = 8 * (#str - idx)
@@ -19,9 +21,10 @@ local function string_to_int(str)
     end
     return num
 end
+local string_to_int = util.string_to_int
 
 --- Convert a value into a string of bytes length.
-local function int_to_string(value, bytes)
+function util.int_to_string(value, bytes)
 
     if bytes > 4 then
         error({msg="An int is at most 4 bytes"})
@@ -38,10 +41,11 @@ local function int_to_string(value, bytes)
 
     return binary
 end
+local int_to_string = util.int_to_string
 
 --- Convert a sequence of bytes to a binary string.
 --- @param data_arr a table of pairs {{#bytes, value}, ...}
-local function data_to_binary_string(data_arr)
+function util.data_to_binary_string(data_arr)
 
     local binary = ''
 
@@ -54,7 +58,7 @@ local function data_to_binary_string(data_arr)
 end
 
 --- A file interface backed by a string.
-local function string_io(initial_data)
+function util.string_io(initial_data)
     return {
         data = initial_data or "",
         pointer = 1,
@@ -76,7 +80,7 @@ end
 --- Binary search a sorted table. Returns positive index when the value is in
 -- the sorted table and a negative index whose negated value is the insertion
 -- index to maintain the sorted state of the table.
-local function binary_search(sorted_values, cmd)
+function util.binary_search(sorted_values, cmd)
     -- Emtpy table?
     if #sorted_values == 0 then
         return -1
@@ -101,8 +105,9 @@ local function binary_search(sorted_values, cmd)
         end
     until not true
 end
+local binary_search = util.binary_search
 
-local function _test()
+function util._test()
 
     local assert_equals = test_util.assert_equals
     local check_test = test_util.check_test
@@ -134,12 +139,4 @@ local function _test()
     end)
 end
 
-util = {
-    string_to_int = string_to_int,
-    int_to_string = int_to_string,
-    data_to_binary_string = data_to_binary_string,
-    string_io = string_io,
-    binary_search = binary_search,
-    _test = _test,
-}
 return util

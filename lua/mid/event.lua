@@ -12,8 +12,10 @@ local string_to_int = util.string_to_int
 local int_to_string = util.int_to_string
 local data_to_binary_string = util.data_to_binary_string
 
+event = {}
+
 --- The command type names.
-local COMMAND_CODES = {
+event.CODES = {
     -- Meta commands are subtypes of the meta code.
     meta = 0xff,
     meta_codes = {
@@ -48,9 +50,10 @@ local COMMAND_CODES = {
         pitch_wheel_change = 0xe,
     },
 }
+local CODES = event.CODES
 
 --- Decode 7-bits-per-bytes variable length field.
-local function decode_var_len_value(file)
+function event.decode_var_len_value(file)
 
     -- Read variable-sized value in 7-bit bytes.
     local num_bytes, value = 0, 0
@@ -75,9 +78,10 @@ local function decode_var_len_value(file)
 
     return num_bytes, value
 end
+local decode_var_len_value = event.decode_var_len_value
 
 --- Encode value with 7-bit bytes.
-local function encode_var_len_value(value)
+function event.encode_var_len_value(value)
 
     local binary = ""
 
@@ -95,9 +99,10 @@ local function encode_var_len_value(value)
 
     return binary
 end
+local encode_var_len_value = event.encode_var_len_value
 
 --- Check length matches expected.
-local function get_len_check_expected(file, num_bytes, expected)
+function event.get_len_check_expected(file, num_bytes, expected)
     local len = string_to_int(file:read(num_bytes))
     if len ~= expected then
         error({msg=string.format(
@@ -106,6 +111,7 @@ local function get_len_check_expected(file, num_bytes, expected)
     end
     return len
 end
+local get_len_check_expected = event.get_len_check_expected
 
 --- Read an event containing only a text field.
 local function text_event_read(file, event)
@@ -121,11 +127,11 @@ local function text_event_write(event, file)
 end
 
 --- The event parser.
-local event_parser = {
+event.parser = {
 
-    [COMMAND_CODES.meta] = {
+    [CODES.meta] = {
 
-        [COMMAND_CODES.meta_codes.set_trk_seq_num] = {
+        [CODES.meta_codes.set_trk_seq_num] = {
             read = function(self, file, event)
                 event.common_name = "meta - set track sequence number"
                 event.len = get_len_check_expected(file, 1, 2)
@@ -140,7 +146,7 @@ local event_parser = {
             end
         },
 
-        [COMMAND_CODES.meta_codes.text] = {
+        [CODES.meta_codes.text] = {
             read = function(self, file, event)
                 event.common_name = "meta - text"
                 return text_event_read(file, event)
@@ -150,7 +156,7 @@ local event_parser = {
             end
         },
 
-        [COMMAND_CODES.meta_codes.text_copyright] = {
+        [CODES.meta_codes.text_copyright] = {
             read = function(self, file, event)
                 event.common_name = "meta - text copyright"
                 return text_event_read(file, event)
@@ -160,7 +166,7 @@ local event_parser = {
             end
         },
 
-        [COMMAND_CODES.meta_codes.seq_track_name] = {
+        [CODES.meta_codes.seq_track_name] = {
 
             read = function(self, file, event)
                 event.common_name = "meta - seq/track name"
@@ -171,7 +177,7 @@ local event_parser = {
             end
         },
 
-        [COMMAND_CODES.meta_codes.track_instrument_name] = {
+        [CODES.meta_codes.track_instrument_name] = {
             read = function(self, file, event)
                 event.common_name = "meta - track instrument name"
                 return text_event_read(file, event)
@@ -181,7 +187,7 @@ local event_parser = {
             end
         },
 
-        [COMMAND_CODES.meta_codes.lyric] = {
+        [CODES.meta_codes.lyric] = {
             read = function(self, file, event)
                 event.common_name = "meta - lyric"
                 return text_event_read(file, event)
@@ -191,7 +197,7 @@ local event_parser = {
             end
         },
 
-        [COMMAND_CODES.meta_codes.marker] = {
+        [CODES.meta_codes.marker] = {
             read = function(self, file, event)
                 event.common_name = "meta - marker"
                 return text_event_read(file, event)
@@ -201,7 +207,7 @@ local event_parser = {
             end
         },
 
-        [COMMAND_CODES.meta_codes.cue_point] = {
+        [CODES.meta_codes.cue_point] = {
             read = function(self, file, event)
                 event.common_name = "meta - cue point"
                 return text_event_read(file, event)
@@ -211,7 +217,7 @@ local event_parser = {
             end
         },
 
-        [COMMAND_CODES.meta_codes.track_end] = {
+        [CODES.meta_codes.track_end] = {
             read = function(self, file, event)
                 event.common_name = "meta - track end"
                 event.data = string_to_int(file:read(1))
@@ -227,7 +233,7 @@ local event_parser = {
             end
         },
 
-        [COMMAND_CODES.meta_codes.set_tempo] = {
+        [CODES.meta_codes.set_tempo] = {
             read = function(self, file, event)
                 event.common_name = "meta - set tempo"
                 event.len = get_len_check_expected(file, 1, 3)
@@ -242,7 +248,7 @@ local event_parser = {
             end
         },
 
-        [COMMAND_CODES.meta_codes.time_sig] = {
+        [CODES.meta_codes.time_sig] = {
             read = function(self, file, event)
                 event.common_name = "meta - time signature"
                 event.len = get_len_check_expected(file, 1, 4)
@@ -263,7 +269,7 @@ local event_parser = {
             end
         },
 
-        [COMMAND_CODES.meta_codes.key_sig] = {
+        [CODES.meta_codes.key_sig] = {
             read = function(self, file, event)
                 event.common_name = "meta - key signature"
                 event.len = get_len_check_expected(file, 1, 2)
@@ -288,7 +294,7 @@ local event_parser = {
             end
         },
 
-        [COMMAND_CODES.meta_codes.seq_specific] = {
+        [CODES.meta_codes.seq_specific] = {
             read = function(self, file, event)
                 event.common_name = "meta - sequencer specific"
                 return text_event_read(file, event)
@@ -327,7 +333,7 @@ local event_parser = {
         end,
     },
 
-    [COMMAND_CODES.timing_clock] = {
+    [CODES.timing_clock] = {
         read = function(self, file, event)
             event.common_name = "timing clock"
             return 0
@@ -335,7 +341,7 @@ local event_parser = {
         write = function(self, event, file) end
     },
 
-    [COMMAND_CODES.start_cur_seq] = {
+    [CODES.start_cur_seq] = {
         read = function(self, file, event)
             event.common_name = "start current sequence"
             return 0
@@ -343,7 +349,7 @@ local event_parser = {
         write = function(self, event, file) end
     },
 
-    [COMMAND_CODES.cont_stop_seq] = {
+    [CODES.cont_stop_seq] = {
         read = function(self, file, event)
             event.common_name = "continue stopped sequence"
             return 0
@@ -351,7 +357,7 @@ local event_parser = {
         write = function(self, event, file) end
     },
 
-    [COMMAND_CODES.stop_seq] = {
+    [CODES.stop_seq] = {
         read = function(self, file, event)
             event.common_name = "stop sequence"
             return 0
@@ -359,7 +365,7 @@ local event_parser = {
         write = function(self, event, file) end
     },
 
-    [COMMAND_CODES.ctype.note_off] = {
+    [CODES.ctype.note_off] = {
         read = function(self, file, event)
             event.common_name = "ctype - note off"
             event.note_number = string_to_int(file:read(1))
@@ -374,7 +380,7 @@ local event_parser = {
         end
     },
 
-    [COMMAND_CODES.ctype.note_on] = {
+    [CODES.ctype.note_on] = {
         read = function(self, file, event)
             event.common_name = "ctype - note on"
             event.note_number = string_to_int(file:read(1))
@@ -389,7 +395,7 @@ local event_parser = {
         end
     },
 
-    [COMMAND_CODES.ctype.key_after_touch] = {
+    [CODES.ctype.key_after_touch] = {
         read = function(self, file, event)
             event.common_name = "ctype - key after-touch"
             event.note_number = string_to_int(file:read(1))
@@ -404,7 +410,7 @@ local event_parser = {
         end
     },
 
-    [COMMAND_CODES.ctype.control_change] = {
+    [CODES.ctype.control_change] = {
         read = function(self, file, event)
             event.common_name = "ctype - control change"
             event.controller_num = string_to_int(file:read(1))
@@ -419,7 +425,7 @@ local event_parser = {
         end
     },
 
-    [COMMAND_CODES.ctype.prog_change] = {
+    [CODES.ctype.prog_change] = {
         read = function(self, file, event)
             event.common_name = "ctype - program (patch) change"
             event.program_num = string_to_int(file:read(1))
@@ -430,7 +436,7 @@ local event_parser = {
         end
     },
 
-    [COMMAND_CODES.ctype.chan_after_touch] = {
+    [CODES.ctype.chan_after_touch] = {
         read = function(self, file, event)
             event.common_name = "ctype - channel after-touch"
             event.channel_num = string_to_int(file:read(1))
@@ -441,7 +447,7 @@ local event_parser = {
         end
     },
 
-    [COMMAND_CODES.ctype.pitch_wheel_change] = {
+    [CODES.ctype.pitch_wheel_change] = {
         read = function(self, file, event)
             event.common_name = "ctype - pitch wheel change"
             event.least_significant = string_to_int(file:read(1))
@@ -504,9 +510,10 @@ local event_parser = {
                 and command_parser:write(event, file)
     end,
 }
+local parser = event.parser
 
 --- Run tests.
-local function _test()
+function event._test()
 
     local string_io = util.string_io
     local assert_equals = test_util.assert_equals
@@ -565,9 +572,9 @@ local function _test()
 
         -- Serialize the simple event.
         local file = string_io()
-        local result = event_parser:write(event, file)
+        local result = parser:write(event, file)
         local from_binary = {}
-        event_parser:read(string_io(file.data), from_binary)
+        parser:read(string_io(file.data), from_binary)
         print("from_binary:")
         print(from_binary)
 
@@ -579,9 +586,9 @@ local function _test()
         -- Serialize and read again since we only simulated essential
         -- fields.
         local file = string_io()
-        local result = event_parser:write(from_binary, file)
+        local result = parser:write(from_binary, file)
         local from_binary_again = {}
-        event_parser:read(string_io(file.data), from_binary_again)
+        parser:read(string_io(file.data), from_binary_again)
 
         -- Check equality.
         for key, value in pairs(from_binary) do
@@ -591,11 +598,5 @@ local function _test()
     end)
 end
 
-mid_event_parser = {
-    COMMAND_CODES = COMMAND_CODES,
-    get_len_check_expected = get_len_check_expected,
-    event_parser = event_parser,
-    _test = _test,
-}
-return mid_event_parser
+return event
 
