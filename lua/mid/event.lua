@@ -43,7 +43,7 @@ event.CODES = {
     },
 
     -- Commands with channel nibble as lower 4 bits.
-    ctype = {
+    midi = {
         note_off = 0x8,
         note_on = 0x9,
         key_after_touch = 0xa,
@@ -368,9 +368,9 @@ event.parser = {
         write = function(self, event, file) end
     },
 
-    [CODES.ctype.note_off] = {
+    [CODES.midi.note_off] = {
         read = function(self, file, event)
-            event.common_name = "ctype - note off"
+            event.common_name = "midi - note off"
             event.note_number = string_to_int(file:read(1))
             event.velocity = string_to_int(file:read(1))
             return 2
@@ -383,9 +383,9 @@ event.parser = {
         end
     },
 
-    [CODES.ctype.note_on] = {
+    [CODES.midi.note_on] = {
         read = function(self, file, event)
-            event.common_name = "ctype - note on"
+            event.common_name = "midi - note on"
             event.note_number = string_to_int(file:read(1))
             event.velocity = string_to_int(file:read(1))
             return 2
@@ -398,9 +398,9 @@ event.parser = {
         end
     },
 
-    [CODES.ctype.key_after_touch] = {
+    [CODES.midi.key_after_touch] = {
         read = function(self, file, event)
-            event.common_name = "ctype - key after-touch"
+            event.common_name = "midi - key after-touch"
             event.note_number = string_to_int(file:read(1))
             event.velocity = string_to_int(file:read(1))
             return 2
@@ -413,9 +413,9 @@ event.parser = {
         end
     },
 
-    [CODES.ctype.control_change] = {
+    [CODES.midi.control_change] = {
         read = function(self, file, event)
-            event.common_name = "ctype - control change"
+            event.common_name = "midi - control change"
             event.controller_num = string_to_int(file:read(1))
             event.new_value = string_to_int(file:read(1))
             return 2
@@ -428,9 +428,9 @@ event.parser = {
         end
     },
 
-    [CODES.ctype.prog_change] = {
+    [CODES.midi.prog_change] = {
         read = function(self, file, event)
-            event.common_name = "ctype - program (patch) change"
+            event.common_name = "midi - program (patch) change"
             event.program_num = string_to_int(file:read(1))
             return 1
         end,
@@ -439,9 +439,9 @@ event.parser = {
         end
     },
 
-    [CODES.ctype.chan_after_touch] = {
+    [CODES.midi.chan_after_touch] = {
         read = function(self, file, event)
-            event.common_name = "ctype - channel after-touch"
+            event.common_name = "midi - channel after-touch"
             event.channel_num = string_to_int(file:read(1))
             return 1
         end,
@@ -450,9 +450,9 @@ event.parser = {
         end
     },
 
-    [CODES.ctype.pitch_wheel_change] = {
+    [CODES.midi.pitch_wheel_change] = {
         read = function(self, file, event)
-            event.common_name = "ctype - pitch wheel change"
+            event.common_name = "midi - pitch wheel change"
             event.least_significant = string_to_int(file:read(1))
             event.most_significant = string_to_int(file:read(1))
             event.pitch = bit.lshift(bit.band(event.most_significant, 0x7f), 7)
@@ -485,17 +485,17 @@ event.parser = {
         event.delta_time = delta_time
 
         event.command = string_to_int(file:read(1))
-        local ctype = bit.rshift(event.command, 4)
+        local midi = bit.rshift(event.command, 4)
 
         --print(string.format("command=0x%x", event.command))
 
         local command_parser
         if self[event.command] ~= nil then
             command_parser = self[event.command]
-        elseif self[ctype] ~= nil then
-            event.ctype = ctype
+        elseif self[midi] ~= nil then
+            event.midi = midi
             event.channel = bit.band(event.command, 0x0f)
-            command_parser = self[ctype]
+            command_parser = self[midi]
         else
             command_parser = self.undef
         end
@@ -506,7 +506,7 @@ event.parser = {
 
     write = function(self, event, file)
         local command_parser = self[event.command]
-                or self[event.ctype]
+                or self[event.midi]
                 or self.undef
         return file:write(encode_var_len_value(event.delta_time)
                 .. int_to_string(event.command, 1))

@@ -15,6 +15,7 @@ local get_len_check_expected = event.get_len_check_expected
 local string_to_int = util.string_to_int
 local int_to_string = util.int_to_string
 local string_io = util.string_io
+local binary_search = util.binary_search
 
 local event_parser = event.parser
 
@@ -139,17 +140,26 @@ end
 --- Filter track events based on type codes.
 --  Event filter codes are of the form:
 --      system = {code, ...}
---      ctype = {code, ...}
+--      midi = {code, ...}
 --      meta = {code, ...}
 --  See CODES for available types.
-function data.filter_track(track, system, ctype, meta)
+function data.filter_track(track, system, midi, meta)
+
+    --- Extract values.
+    local function values_only(data)
+        values = {}
+        for _, value in pairs(data) do
+            table.insert(values, value)
+        end
+        return values
+    end
 
     -- Sort filtered types.
-    local system = system or {}
-    local ctype = ctype or {}
-    local meta = meta or {}
+    local system = values_only(system or {})
+    local midi = values_only(midi or {})
+    local meta = values_only(meta or {})
     table.sort(system)
-    table.sort(ctype)
+    table.sort(midi)
     table.sort(meta)
 
     local filtered_track = {}
@@ -159,16 +169,19 @@ function data.filter_track(track, system, ctype, meta)
     local size = track.size
     local filtered_events = {}
 
+    local dbg_system, dbg_midi, dbg_meta = {}, {}, {}
+
     for _, event in pairs(track.events) do
         -- Determine command type and then check filters.
         local add_event
-        if event.ctype ~= nil then
-            add_event = binary_search(ctype, event.ctype)
+        if event.midi ~= nil then
+            add_event = binary_search(midi, event.midi) > 0
         elseif event.meta ~= nil then
             add_event = binary_search(meta, event.meta) > 0
         else
             add_event = binary_search(system, event.command) > 0
         end
+
         if add_event then
             table.insert(filtered_events, event)
         else
@@ -197,7 +210,6 @@ function data._test()
         local stat, _ = pcall(function() lfs.dir(data_dir) end)
         if stat then
 
-            -- Get a random file from midi.
             mid_files = {}
             for filename in lfs.dir(data_dir) do
                 if filename:lower():find(".mid") ~= nil then
