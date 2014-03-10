@@ -123,8 +123,15 @@ local function rasterize_song(channels, min_clock, max_clock, clock_gcd, note_ev
 end
 
 --- Load a .mid file as a torch dataset.
-function dataset.load(dir)
+--@param time_sig the time signature in form
+--    num/denom-32notesperquarter-ticksperclick-channels-gcd
+--@param input_len the number of discrete time steps per input point X
+--@param target_len the number of discrete time steps per target point Y
+--@param pct_train the proportion of points to use as training data
+--@return train and test sets of pairs (X, Y)
+function dataset.load(dir, time_sig, input_len, target_len, pct_train)
 
+    -- Get all midi files in path.
     mid_files = {}
     for filename in lfs.dir(dir) do
         if filename:lower():find(".mid") ~= nil then
@@ -132,12 +139,13 @@ function dataset.load(dir)
         end
     end
 
+    -- Collect rasterized data matching time signature.
+    sources = {}
+
     -- For each file.
     for _,filename in ipairs(mid_files) do
 
         local file_path = dir.."/"..filename
-        print(file_path)
-
         local file = io.open(file_path, "rb")
 
         local status, err = pcall(function()
@@ -148,8 +156,8 @@ function dataset.load(dir)
             -- We are going to find
             --   1) a hash of the time signature
             --   2) the gcd of all note event time deltas
-            --   3) the maximum delta for any note (duration of piece)
-            --   4) a dictionary note events keyed by note number and channel
+            --   3) the (min, max) clock for any note
+            --   4) a dictionary note events { note -> channel -> {events} }
             local note_events = (function()
                 local t = {}
                 for i = 1,NOTE_DIMS do
@@ -159,8 +167,8 @@ function dataset.load(dir)
             end)()
             local channels_on = {}
             local time_hash = nil
-            local clock_gcd = 0
             local min_clock, max_clock = math.huge, -1
+            local clock_gcd = 0
 
             -- Loop over all tracks and events.
             for _, track in ipairs(middata.tracks) do
@@ -172,15 +180,15 @@ function dataset.load(dir)
                     if event.midi == CODES.midi.note_on or
                         event.midi == CODES.midi.note_off then
 
+                        -- Get channel-specific list of events for this note.
                         channels_on[event.channel] = true
-
-                        -- Wrap events as a clock event with absolute time.
                         local by_channel = note_events[event.note_number]
                         if by_channel[event.channel] == nil then
                             by_channel[event.channel] = {}
                         end
                         local events = by_channel[event.channel]
                             
+                        -- Wrap events as a clock event with absolute time.
                         table.insert(events,
                                 {
                                     clock = clock,
@@ -194,10 +202,10 @@ function dataset.load(dir)
                     elseif event.meta == CODES.meta.time_sig then
                         time_hash = hash_time_signature_event(event)
                     end
-
                 end
             end
 
+            -- Get sorted list of channels from table of active channels.
             local channels = (function()
                 local channels = {}
                 for channel in pairs(channels_on) do
@@ -207,29 +215,89 @@ function dataset.load(dir)
                 return channels
             end)()
 
-            --local rasterized = rasterize_song(
-            --        channels, min_clock, max_clock, clock_gcd, note_events)
-                    --
-            --print(note_events)
-            --print(channels)
-            print("time hash: "..time_hash)
-            print("note clock gcd: "..clock_gcd)
-            print("min note clock: "..min_clock)
-            print("max note clock: "..max_clock)
+            local my_time_sig = time_hash.."-"..#channels.."-"..clock_gcd
 
-            local raster_clock_offset = -min_clock / clock_gcd
-            local time_steps_to_render = (max_clock / clock_gcd) + raster_clock_offset
-            local channel_note_dims = #channels * NOTE_DIMS
-            print("dims: ("..time_steps_to_render..", "..channel_note_dims..")")
+            -- Check that time signature matches filter type.
+            if my_time_sig == time_sig then
+
+              -- Rasterize song and append to output.
+              local rasterized = rasterize_song(
+                      channels, min_clock, max_clock, clock_gcd, note_events)
+
+              print(file_path)
+              print("time sig: "..my_time_sig)
+              print("min, max note clock: "..min_clock..","..max_clock)
+              print("dims: "..tostring(rasterized:size()))
+
+              table.insert(sources, {
+                  name = filename,
+                  data = rasterized,
+                  middata = middata,
+              })
+            end
 
             --print(rasterized:size())
 
         end)
 
         file:close()
-
     end
 
+    -- For each valid source, split data into points and then partition into
+    -- train and test sets. Each torch narrow() does not copy data so it can
+    -- store efficiently overlapping subsequences of the source.
+    local points = {}
+    local input_target_len = input_len + target_len
+    for _, source in ipairs(sources) do
+        local data = source.data
+        for i = input_target_len,data:size()[1] do
+            local X_begin = i - input_target_len + 1
+            local Y_begin = i - target_len + 1
+            local X, Y = data:narrow(1, X_begin, input_len),
+                data:narrow(1, Y_begin, target_len)
+            table.insert(points, {X, Y})
+        end
+    end
+
+    -- Shuffle the points and then partition into train, test sets.
+    util.shuffle(points)
+    local num_train = math.ceil(#points * pct_train)
+    local num_test = #points - num_train
+
+    --- Train dataset iterator.
+    local function data_train()
+        local i = 0
+        return function()
+            i = i + 1
+            if i <= num_train then
+                return points[i]
+            else
+                return nil
+            end
+        end
+    end
+
+    --- Test dataset iterator.
+    local function data_test()
+        local i = num_train
+        return function()
+            i = i + 1
+            if i <= #points then
+                return points[i]
+            else
+                return nil
+            end
+        end
+    end
+
+    return {
+        data_train = data_train,
+        data_test = data_test(),
+        num_train = num_train,
+        num_test = num_test,
+        points = points,
+        sources = sources,
+    }
 end
 
 return dataset

@@ -107,6 +107,16 @@ function util.binary_search(sorted_values, cmd)
 end
 local binary_search = util.binary_search
 
+--- Knuth shuffle a table in-place.
+function util.shuffle(data)
+    -- For each i, select a random index in [i, #data] to swap.
+    for i = 1,#data-1 do
+        local j = math.random(i, #data)
+        table[i], table[j] = table[j], table[i]
+    end
+    return data
+end
+
 function util._test()
 
     local assert_equals = test_util.assert_equals
