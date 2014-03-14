@@ -88,7 +88,7 @@ local function rasterize_song(channels, min_clock, max_clock, clock_gcd, note_ev
     local time_steps_to_render = (max_clock / clock_gcd) + raster_clock_offset
     local channel_note_dims = #channels * NOTE_DIMS
     local rasterized = torch.zeros(time_steps_to_render, channel_note_dims)
-    print(rasterized:size())
+    --print(rasterized:size())
 
     for note, by_channel in pairs(note_events) do
 
@@ -123,7 +123,8 @@ local function rasterize_song(channels, min_clock, max_clock, clock_gcd, note_ev
 end
 
 --- Load a .mid file as a torch dataset.
---@param time_sig the time signature in form
+--@param dir the directory containing .mid files
+--@param time_sig the time signature in the form
 --    num/denom-32notesperquarter-ticksperclick-channels-gcd
 --@param input_len the number of discrete time steps per input point X
 --@param target_len the number of discrete time steps per target point Y
@@ -224,10 +225,10 @@ function dataset.load(dir, time_sig, input_len, target_len, pct_train)
               local rasterized = rasterize_song(
                       channels, min_clock, max_clock, clock_gcd, note_events)
 
-              print(file_path)
-              print("time sig: "..my_time_sig)
-              print("min, max note clock: "..min_clock..","..max_clock)
-              print("dims: "..tostring(rasterized:size()))
+              --print(file_path)
+              --print("time sig: "..my_time_sig)
+              --print("min, max note clock: "..min_clock..","..max_clock)
+              --print("dims: "..tostring(rasterized:size()))
 
               table.insert(sources, {
                   name = filename,
