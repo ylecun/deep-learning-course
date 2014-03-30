@@ -1,3 +1,8 @@
+--[
+-- NN package model helpers.
+--
+-- (c) 2014 Brandon L. Reiss
+--]
 require "nn"
 require "math"
 require "torch"
