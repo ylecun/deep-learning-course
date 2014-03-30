@@ -5,6 +5,7 @@
 --]
 lapp = require 'pl.lapp'
 path = require 'pl.path'
+require "os"
 
 -- Get lua module path.
 local bin_dir = path.dirname(arg[0])
@@ -13,7 +14,9 @@ local mod_pattern = path.join(lua_dir, "?", "init.lua")
 local script_pattern = path.join(lua_dir, "?.lua")
 package.path = mod_pattern..";"..script_pattern..";"..package.path
 
-mid = require 'mid'
+require 'mid'
+require 'models'
+require 'nn'
 
 --[
 -- TODO:
@@ -53,7 +56,7 @@ files.
   <TIME_SIG_CHANNELS_GCD> (string) time signature, channels, and gcd
                           e.g. 4/2-8-24-5-256
   <OUTPUT_DIR> (string) directory used to save output model file
-               YYYY-MM-DD-HHMMSS_model and datasets
+               and an example generated song
 ]]
 
 for key, value in pairs(args) do
@@ -68,3 +71,26 @@ ds = mid.dataset.load(
         args.dataset_train_split
         )
 
+date_str = os.date("%Y%m%d_%H%M%S")
+
+HIDDEN_UNITS = 256
+
+-- Create 2-layer NN with HIDDEN_UNITS hidden units. Each hidden unit is a
+-- feature extractor that is applied to an input time slice for a single note.
+model = models.simple_2lnn(ds, HIDDEN_UNITS)
+-- Train with simple regression loss.
+-- TODO: a more perceptual loss function is ideal
+models.train_model(ds, model, nn.MSECriterion())
+
+-- Write out the model.
+model_filename = 'model-2lnn-'..HIDDEN_UNITS..'-'..date_str
+model_output_path = path.join(args.OUTPUT_DIR, model_filename)
+torch.save(model_output_path, model)
+
+song_data = models.predict(model, ds.data_test()[1][1], 10)
+song = dataset.compose(ds.sources[1], song_data)
+
+-- Write out generated song.
+gen_filename = 'gen-'..date_str..'.mid'
+gen_output_path = path.join(args.OUTPUT_DIR, gen_filename)
+mid.data.write(song.middata, io.open(gen_output_path, 'w'))

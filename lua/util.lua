@@ -117,6 +117,20 @@ function util.shuffle(data)
     return data
 end
 
+--- Copy a table.
+function util.copy(table)
+    c = {}
+    for k, v in pairs(table) do
+        c[k] = v
+    end
+    return c
+end
+
+--- Check if number is NaN.
+function util.isnan(num)
+    return num ~= num
+end
+
 function util._test()
 
     local assert_equals = test_util.assert_equals

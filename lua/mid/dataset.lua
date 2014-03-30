@@ -12,8 +12,10 @@ local mid_data = require "mid/data"
 local mid_event = require "mid/event"
 
 local CODES = mid_event.CODES
+local event_parser = mid_event.parser
 
 local binary_search = util.binary_search
+local string_io = util.string_io
 
 --- Number of unique note values allowed by MIDI.
 local NOTE_DIMS = 128
@@ -72,12 +74,12 @@ local function hash_time_signature_event(event)
             event.metro_ticks_per_click)
 end
 
---- Create a discretization of the midi file such that each tensor row is a
+--- Create a discretization of the midi file such that each tensor column is a
 -- simple accounting of the notes that are on and off separated by channel.
 -- The notes are codes from 0-127.
 --
 -- The tensor for the entire piece will be
---     ((max_clock - min_clock) / clock_gcd) x (channels * NOTE_DIMS)
+--     (channels * NOTE_DIMS) x ((max_clock - min_clock) / clock_gcd)
 --
 -- We require hashing events by note and then sorting them by time.  The
 -- entire sequence length is known, so we create an empty bitmap and then
@@ -87,15 +89,15 @@ local function rasterize_song(channels, min_clock, max_clock, clock_gcd, note_ev
     local raster_clock_offset = -min_clock / clock_gcd
     local time_steps_to_render = (max_clock / clock_gcd) + raster_clock_offset
     local channel_note_dims = #channels * NOTE_DIMS
-    local rasterized = torch.zeros(time_steps_to_render, channel_note_dims)
+    local rasterized = torch.zeros(channel_note_dims, time_steps_to_render)
     --print(rasterized:size())
 
     for note, by_channel in pairs(note_events) do
 
         for channel, clock_events in pairs(by_channel) do
             local channel_idx = binary_search(channels, channel)
-            local column_idx = ((channel_idx - 1) * NOTE_DIMS) + note + 1
-            local note_channel_data = rasterized:narrow(2, column_idx, 1)
+            local row_idx = ((channel_idx - 1) * NOTE_DIMS) + note + 1
+            local note_channel_data = rasterized:narrow(1, row_idx, 1)
 
             local note_begin, velocity = nil, nil
 
@@ -111,7 +113,7 @@ local function rasterize_song(channels, min_clock, max_clock, clock_gcd, note_ev
                     and note_begin ~= nil then
                     -- Set range for this note on with velocity.
                     local duration = raster_clock - note_begin
-                    note_channel_data:narrow(1, note_begin, duration):fill(velocity)
+                    note_channel_data:narrow(2, note_begin, duration):fill(velocity)
                     note_begin, velocity = nil, nil
                 end
 
@@ -166,13 +168,13 @@ function dataset.load(dir, time_sig, input_len, target_len, pct_train)
                 end
                 return t
             end)()
-            local channels_on = {}
+            local channel_to_track = {}
             local time_hash = nil
             local min_clock, max_clock = math.huge, -1
             local clock_gcd = 0
 
             -- Loop over all tracks and events.
-            for _, track in ipairs(middata.tracks) do
+            for track_idx, track in ipairs(middata.tracks) do
                 local clock = 0
                 for _, event in ipairs(track.events) do
 
@@ -182,12 +184,14 @@ function dataset.load(dir, time_sig, input_len, target_len, pct_train)
                         event.midi == CODES.midi.note_off then
 
                         -- Get channel-specific list of events for this note.
-                        channels_on[event.channel] = true
+                        local channel = event.channel
+                        channel_to_track[channel] = track_idx
+
                         local by_channel = note_events[event.note_number]
-                        if by_channel[event.channel] == nil then
-                            by_channel[event.channel] = {}
+                        if by_channel[channel] == nil then
+                            by_channel[channel] = {}
                         end
-                        local events = by_channel[event.channel]
+                        local events = by_channel[channel]
                             
                         -- Wrap events as a clock event with absolute time.
                         table.insert(events,
@@ -207,23 +211,23 @@ function dataset.load(dir, time_sig, input_len, target_len, pct_train)
             end
 
             -- Get sorted list of channels from table of active channels.
-            local channels = (function()
-                local channels = {}
-                for channel in pairs(channels_on) do
-                    table.insert(channels, channel)
+            local channel_order = (function()
+                local channels_sorted = {}
+                for channel in pairs(channel_to_track) do
+                    table.insert(channels_sorted, channel)
                 end
-                table.sort(channels)
-                return channels
+                table.sort(channels_sorted)
+                return channels_sorted
             end)()
 
-            local my_time_sig = time_hash.."-"..#channels.."-"..clock_gcd
+            local my_time_sig = time_hash.."-"..#channel_order.."-"..clock_gcd
 
             -- Check that time signature matches filter type.
             if my_time_sig == time_sig then
 
               -- Rasterize song and append to output.
               local rasterized = rasterize_song(
-                      channels, min_clock, max_clock, clock_gcd, note_events)
+                      channel_order, min_clock, max_clock, clock_gcd, note_events)
 
               --print(file_path)
               --print("time sig: "..my_time_sig)
@@ -234,6 +238,9 @@ function dataset.load(dir, time_sig, input_len, target_len, pct_train)
                   name = filename,
                   data = rasterized,
                   middata = middata,
+                  channel_to_track = channel_to_track,
+                  channel_order = channel_order,
+                  clock_gcd = clock_gcd,
               })
             end
 
@@ -251,11 +258,11 @@ function dataset.load(dir, time_sig, input_len, target_len, pct_train)
     local input_target_len = input_len + target_len
     for _, source in ipairs(sources) do
         local data = source.data
-        for i = input_target_len,data:size()[1] do
+        for i = input_target_len,data:size()[2] do
             local X_begin = i - input_target_len + 1
             local Y_begin = i - target_len + 1
-            local X, Y = data:narrow(1, X_begin, input_len),
-                data:narrow(1, Y_begin, target_len)
+            local X, Y = data:narrow(2, X_begin, input_len),
+                data:narrow(2, Y_begin, target_len)
             table.insert(points, {X, Y})
         end
     end
@@ -265,40 +272,215 @@ function dataset.load(dir, time_sig, input_len, target_len, pct_train)
     local num_train = math.ceil(#points * pct_train)
     local num_test = #points - num_train
 
-    --- Train dataset iterator.
+    --- Train dataset.
+    -- Must have size() and index operator [].
     local function data_train()
-        local i = 0
-        return function()
-            i = i + 1
-            if i <= num_train then
-                return points[i]
+        local ds = {}
+
+        ds.size = function()
+            return num_train
+        end
+
+        local mt = getmetatable(ds)
+        if not mt then
+            mt = {}
+        end
+        mt.__index = function(ds, key)
+            local num = tonumber(key)
+            if num then
+                if num <= num_train then
+                    return points[num]
+                else
+                    return nil
+                end
             else
-                return nil
+                error("Must index by a number")
             end
         end
+        setmetatable(ds, mt)
+
+        return ds
     end
 
     --- Test dataset iterator.
+    -- Must have size() and index operator [].
     local function data_test()
-        local i = num_train
-        return function()
-            i = i + 1
-            if i <= #points then
-                return points[i]
+        local ds = {}
+
+        ds.size = function()
+            return num_test
+        end
+
+        local mt = getmetatable(ds)
+        if not mt then
+            mt = {}
+        end
+        mt.__index = function(ds, key)
+            local num = tonumber(key)
+            if num then
+                if num > 0 then
+                    return points[num_train + num]
+                else
+                    return nil
+                end
             else
-                return nil
+                error("Must index by a number")
             end
         end
+        setmetatable(ds, mt)
+
+        return ds
     end
 
     return {
         data_train = data_train,
-        data_test = data_test(),
+        data_test = data_test,
         num_train = num_train,
         num_test = num_test,
         points = points,
         sources = sources,
     }
+end
+
+--- Add note events.
+local add_note_events = function(events, channel, note_number,
+                                    clock_on, clock_off, gcd, velocity)
+    local note_on = {
+        midi = CODES.midi.note_on,
+        command = bit.lshift(CODES.midi.note_on, 4) + channel,
+        delta_time = clock_on * gcd,
+        note_number =  note_number,
+        velocity = velocity,
+        channel = channel,
+    }
+    local note_off = {
+        midi = CODES.midi.note_off,
+        command = bit.lshift(CODES.midi.note_off, 4) + channel,
+        delta_time = clock_off * gcd,
+        note_number =  note_number,
+        velocity = 0,
+        channel = channel,
+    }
+    table.insert(events, note_on)
+    table.insert(events, note_off)
+end
+
+--- Remove note events.
+local copy_remove_note_events = function(events)
+    local new_events = {}
+    for _, event in pairs(events) do
+        local is_midi = event.midi ~= nil
+        local is_note = is_midi
+                and (event.midi == CODES.midi.note_on
+                        or event.midi == CODES.midi.note_off)
+        if not is_midi or not is_note then
+            table.insert(new_events, event)
+        end
+    end
+    return new_events
+end
+
+function dataset.compose(from_source, song)
+
+    local source = util.copy(from_source)
+    local clock_gcd = source.clock_gcd
+    source.data = song
+
+    source.middata = util.copy(source.middata)
+    local middata = source.middata
+    middata.tracks = util.copy(middata.tracks)
+    local tracks = middata.tracks
+
+    for raster_idx, channel in ipairs(source.channel_order) do
+
+        local chan_row_begin = 1 + (raster_idx - 1) * NOTE_DIMS
+        local channel_data = song:narrow(1, chan_row_begin, NOTE_DIMS)
+
+        --print('channel_data:size() = '..tostring(channel_data:size()))
+
+        local track_idx = source.channel_to_track[channel]
+        tracks[track_idx] = util.copy(tracks[track_idx])
+        local track = tracks[track_idx]
+
+        -- For each event in the input song, create an event in the output.
+
+        local on = {}
+        track.events = copy_remove_note_events(track.events)
+        local events = track.events
+        local track_end_event = events[#events]
+        events[#events] = nil
+
+        for raster_clock = 1, channel_data:size(2) do
+            
+            local notes_data = channel_data:narrow(2, raster_clock, 1)
+
+            --print('notes_data = '..tostring(notes_data))
+            --print('notes_data:size() = '..tostring(notes_data:size()))
+
+            -- Go over each note in the channel and see if we have an event.
+            for note_idx = 1, NOTE_DIMS do
+
+                -- Extract note velocity enforcing data bounds.
+                local note_value_raw = notes_data[note_idx][1]
+
+                local velocity
+                if util.isnan(note_value_raw) then
+                    velocity = 0
+                else
+                    velocity = math.max(0, math.min(255,
+                            math.floor(note_value_raw * 255)))
+                end
+
+                --print(channel, note_idx, velocity)
+
+                -- Assemble possible states for this note.
+
+                local note_on = velocity > 0
+                local note_on_already = on[note_idx] ~= nil
+
+                local note_changing = note_on_already
+                        and on[note_idx][2] ~= velocity
+
+                local note_starting = not note_on_already and note_on
+                local note_ending = (note_on_already and not note_on)
+
+                -- Update state for this note.
+
+                if note_ending or note_changing then
+                    add_note_events(events, channel, note_idx,
+                            on[note_idx][1], raster_clock,
+                            clock_gcd, on[note_idx][2])
+                    on[note_idx] = nil
+                end
+
+                if note_starting or note_changing then
+                    on[note_idx] = { raster_clock, velocity };
+                end
+
+            end
+        end
+
+        -- End all notes still on.
+        local end_ts = channel_data:size(2) + 1
+        for note_idx, on_data in pairs(on) do
+            add_note_events(events, channel, note_idx,
+                    on_data[1], end_ts, clock_gcd, on_data[2])
+        end
+
+        -- Update end-of-track event and append.
+        track_end_event.delta_time = end_ts * clock_gcd
+        table.insert(events, track_end_event)
+
+        -- Determine track size.
+        local str_file = string_io()
+        for _, event in ipairs(events) do
+            event_parser:write(event, str_file)
+        end
+        track.size = #str_file.data
+
+    end
+
+    return source
 end
 
 return dataset
