@@ -41,7 +41,8 @@ mid = {
 
     -- From dataset.
     dataset = {
-        load = mid_dataset.load
+        load = mid_dataset.load,
+        compose = mid_dataset.compose,
     },
 }
 return mid

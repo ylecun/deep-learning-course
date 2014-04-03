@@ -163,4 +163,13 @@ function util._test()
     end)
 end
 
+--- Get or iniitalize key with default function.
+function util.get_or_default(t, k, default)
+    default = default or function() return {} end
+    if t[k] == nil then
+        t[k] = default()
+    end
+    return t[k]
+end
+
 return util

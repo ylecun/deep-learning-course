@@ -8,9 +8,10 @@
 lapp = require 'pl.lapp'
 path = require 'pl.path'
 require "os"
+require "paths"
 
 -- Get lua module path.
-local bin_dir = path.dirname(arg[0])
+local bin_dir = paths.dirname(paths.thisfile())
 local lua_dir = path.abspath(path.join(bin_dir, "../lua"))
 local mod_pattern = path.join(lua_dir, "?", "init.lua")
 local script_pattern = path.join(lua_dir, "?.lua")
@@ -53,10 +54,10 @@ Train a learning machine to predict sequences of notes extracted from MIDI
 files.
   -i, --input-window-size (default 10) size in gcd ticks of input point X
   -o, --output-window-size (default 1) size in gcd ticks of target point Y
-  -s, --dataset-train-split (default 0.8) percentage of data to use for training
+  -s, --dataset-train-split (default 0.9) percentage of data to use for training
   <INPUT_DIR> (string) directory where input *.mid files reside
   <TIME_SIG_CHANNELS_GCD> (string) time signature, channels, and gcd
-                          e.g. 4/2-8-24-5-256
+                          e.g. 4/2-8-24-4-256
   <OUTPUT_DIR> (string) directory used to save output model file
                and an example generated song
 ]]
@@ -74,6 +75,7 @@ ds = mid.dataset.load(
         )
 
 date_str = os.date("%Y%m%d_%H%M%S")
+print('Date string: '..date_str)
 
 HIDDEN_UNITS = 256
 
@@ -90,7 +92,7 @@ model_output_path = path.join(args.OUTPUT_DIR, model_filename)
 torch.save(model_output_path, model)
 
 song_data = models.predict(model, ds.data_test()[1][1], 10)
-song = dataset.compose(ds.sources[1], song_data)
+song = mid.dataset.compose(ds.sources[1], song_data, 4)
 
 -- Write out generated song.
 gen_filename = 'gen-'..date_str..'.mid'
