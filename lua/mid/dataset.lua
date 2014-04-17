@@ -310,6 +310,10 @@ function dataset.load(dir, time_sig, input_len, target_len, pct_train)
               table.insert(sources,
                            make_source(filename, middata,
                                        note_event_data, channel_order, rasterized))
+
+--            else
+--              print("Rejecting file "..file_path)
+--              print("time sig: "..note_event_data.time_sig)
             end
         end)
 

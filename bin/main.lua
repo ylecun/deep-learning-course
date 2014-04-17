@@ -20,6 +20,7 @@ package.path = mod_pattern..";"..script_pattern..";"..package.path
 require 'mid'
 require 'models'
 require 'nn'
+require 'PerceptualLoss'
 
 --[
 -- TODO:
@@ -74,17 +75,25 @@ ds = mid.dataset.load(
         args.dataset_train_split
         )
 
+--print("SELECTING IDX 562")
+--for i = 1, #ds.points do
+--    local i_wnd = ds.points[i][1]:size(2)
+--    local o_wnd = ds.points[i][2]:size(2)
+--    ds.points[i][1] = ds.points[i][1][562]:reshape(1, i_wnd)
+--    ds.points[i][2] = ds.points[i][2][562]:reshape(1, o_wnd)
+--end
+
 date_str = os.date("%Y%m%d_%H%M%S")
 print('Date string: '..date_str)
 
-HIDDEN_UNITS = 256
+HIDDEN_UNITS = 16
 
 -- Create 2-layer NN with HIDDEN_UNITS hidden units. Each hidden unit is a
 -- feature extractor that is applied to an input time slice for a single note.
 model = models.simple_2lnn(ds, HIDDEN_UNITS)
--- Train with simple regression loss.
--- TODO: a more perceptual loss function is ideal
-models.train_model(ds, model, nn.MSECriterion())
+
+--models.train_model(ds, model, nn.MSECriterion())
+models.train_model(ds, model, PerceptualLoss(to_byte))
 
 -- Write out the model.
 model_filename = 'model-2lnn-'..HIDDEN_UNITS..'-'..date_str
