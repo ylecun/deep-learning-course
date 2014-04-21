@@ -31,6 +31,16 @@ local function abs_to_raster_time(t_abs, t_min, gcd)
     return 1 + ((t_abs - t_min) / gcd)
 end
 
+-- [0, 255] => [-1, 1]
+local function default_from_byte(x)
+    return (x / 127.5) - 1
+end
+
+-- [-1, 1] => [0, 255]
+local function default_to_byte(x)
+    return math.max(0, math.min(255, math.floor((x + 1) * 127.5)))
+end
+
 --- A simple clock converting raw clock time to raster time.
 local function raster_clock(t_min, t_max, gcd)
 
@@ -123,7 +133,10 @@ end
 -- We require hashing events by note and then sorting them by time.  The
 -- entire sequence length is known, so we create an empty bitmap and then
 -- fill in the notes where they occur.
-local function rasterize_song(channels, raster_clock, note_events)
+--
+-- :param function from_byte: Takes integer velocity from MIDI to
+-- rasterized value.
+local function rasterize_song(channels, raster_clock, note_events, from_byte)
 
     local channel_note_dims = #channels * NOTE_DIMS
     local rasterized = torch.zeros(channel_note_dims, raster_clock.raster_range)
@@ -154,7 +167,7 @@ local function rasterize_song(channels, raster_clock, note_events)
 
                 if event.midi == CODES.midi.note_on then
                     note_begin = clock
-                    velocity = event.velocity / 255.0
+                    velocity = from_byte(event.velocity)
 
                 elseif event.midi == CODES.midi.note_off
                     and note_begin ~= nil then
@@ -255,14 +268,19 @@ local function make_source(filename, middata,
 end
 
 --- Load a .mid file as a torch dataset.
---@param dir the directory containing .mid files
---@param time_sig the time signature in the form
+--:param dir: the directory containing .mid files
+--:param time_sig: the time signature in the form
 --    num/denom-32notesperquarter-ticksperclick-channels-gcd
---@param input_len the number of discrete time steps per input point X
---@param target_len the number of discrete time steps per target point Y
---@param pct_train the proportion of points to use as training data
---@return train and test sets of pairs (X, Y)
-function dataset.load(dir, time_sig, input_len, target_len, pct_train)
+--:param input_len: the number of discrete time steps per input point X
+--:param target_len: the number of discrete time steps per target point Y
+--:param pct_train: the proportion of points to use as training data
+--:param function from_byte: Takes integer velocity from MIDI to
+-- rasterized value (default transforms in [-1, 1]).
+--:return: train and test sets of pairs (X, Y)
+function dataset.load(dir, time_sig, input_len, target_len, pct_train, from_byte)
+
+    -- Default from_byte has values in [-1, 1]
+    from_byte = from_byte or default_from_byte
 
     -- Get all midi files in path.
     mid_files = {}
@@ -301,7 +319,9 @@ function dataset.load(dir, time_sig, input_len, target_len, pct_train)
               -- Rasterize song and append to output.
               local rasterized = rasterize_song(
                       channel_order,
-                      note_event_data.raster_clock, note_event_data.events)
+                      note_event_data.raster_clock,
+                      note_event_data.events,
+                      from_byte)
 
               print("Adding file "..file_path)
               print("time sig: "..note_event_data.time_sig)
@@ -456,7 +476,9 @@ end
 
 --- Transform a rasterized song into midi data using a dataset source to
 --specify base data such as tempos, instruments, and so fourth.
-function dataset.compose(from_source, song, debounce_thresh)
+function dataset.compose(from_source, song, debounce_thresh, to_byte)
+
+    to_byte = to_byte or default_to_byte
 
     -- Ignore jumps of +/- debounce_thresh.
     debounce_thresh = debounce_thresh or 0
@@ -509,8 +531,7 @@ function dataset.compose(from_source, song, debounce_thresh)
                 if util.isnan(note_value_raw) then
                     velocity = 0
                 else
-                    velocity = math.max(0, math.min(255,
-                            math.floor(note_value_raw * 255)))
+                    velocity = to_byte(note_value_raw)
                 end
 
                 --print(channel, note_idx, velocity)

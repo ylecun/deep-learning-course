@@ -7,6 +7,8 @@ require "nn"
 require "math"
 require "torch"
 
+require "SgdMomentum"
+
 models = {}
 
 --- Create a simple 2-layer NN.
@@ -18,8 +20,11 @@ function models.simple_2lnn(ds, num_hidden)
 
     local mlp = nn.Sequential()
     mlp:add(nn.Linear(input_wnd, num_hidden))
-    mlp:add(nn.Tanh())
+    --mlp:add(nn.Tanh())
+    mlp:add(nn.SoftPlus())
     mlp:add(nn.Linear(num_hidden, output_wnd))
+
+    mlp:reset(1e-5)
 
     return mlp
 end
@@ -28,7 +33,7 @@ end
 function models.train_model(ds, model, criterion)
 
     local train = ds.data_train()
-    local trainer = nn.StochasticGradient(model, criterion)
+    local trainer = nn.SgdMomentum(model, criterion)
     trainer:train(train)
 
     local train_loss = 0

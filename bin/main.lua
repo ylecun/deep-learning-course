@@ -56,16 +56,13 @@ files.
   -i, --input-window-size (default 10) size in gcd ticks of input point X
   -o, --output-window-size (default 1) size in gcd ticks of target point Y
   -s, --dataset-train-split (default 0.9) percentage of data to use for training
+  -h, --hidden-units (default 256) number of 2lnn hidden units
   <INPUT_DIR> (string) directory where input *.mid files reside
   <TIME_SIG_CHANNELS_GCD> (string) time signature, channels, and gcd
                           e.g. 4/2-8-24-4-256
   <OUTPUT_DIR> (string) directory used to save output model file
                and an example generated song
 ]]
-
-for key, value in pairs(args) do
-    print(key, value)
-end
 
 ds = mid.dataset.load(
         args.INPUT_DIR,
@@ -83,20 +80,25 @@ ds = mid.dataset.load(
 --    ds.points[i][2] = ds.points[i][2][562]:reshape(1, o_wnd)
 --end
 
+for key, value in pairs(args) do
+    print(key, value)
+end
+
 date_str = os.date("%Y%m%d_%H%M%S")
 print('Date string: '..date_str)
+print('Num training: '..ds.data_train():size())
 
-HIDDEN_UNITS = 16
+-- Create 2-layer NN with specified hidden units. Each hidden unit is a feature
+-- extractor that is applied to an input time slice for a single note.
+model = models.simple_2lnn(ds, args.hidden_units)
 
--- Create 2-layer NN with HIDDEN_UNITS hidden units. Each hidden unit is a
--- feature extractor that is applied to an input time slice for a single note.
-model = models.simple_2lnn(ds, HIDDEN_UNITS)
+--models.train_model(ds, model, nn.AbsCriterion())
+err_train, err_test = models.train_model(ds, model, PerceptualLoss())
 
---models.train_model(ds, model, nn.MSECriterion())
-models.train_model(ds, model, PerceptualLoss(to_byte))
+print("avg error train/test", err_train, err_test)
 
 -- Write out the model.
-model_filename = 'model-2lnn-'..HIDDEN_UNITS..'-'..date_str
+model_filename = 'model-2lnn-'..args.hidden_units..'-'..date_str
 model_output_path = path.join(args.OUTPUT_DIR, model_filename)
 torch.save(model_output_path, model)
 
