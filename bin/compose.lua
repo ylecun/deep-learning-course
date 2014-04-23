@@ -61,7 +61,7 @@ local num_points = data:size()
 local random_point = math.random(num_points)
 local seed = data[random_point][1]
 song_data = models.predict(model, seed, args.LENGTH)
-song = mid.dataset.compose(ds.sources[1], song_data, 0)
+song = mid.dataset.compose(ds.sources[1], song_data, 4)
 
 -- Write out generated song.
 gen_filename = args.filename or 'gen-'..date_str..'.mid'
