@@ -37,9 +37,9 @@ function SgdMomentum:train(dataset)
 
    print("# SgdMomentum: training")
 
+   local iteration = 1
    while true do
 
-      local iteration = 1
       local currentError = 0
       for t = 1,dataset:size() do
          local example = dataset[shuffledIndices[t]]
