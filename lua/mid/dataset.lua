@@ -139,7 +139,8 @@ end
 local function rasterize_song(channels, raster_clock, note_events, from_byte)
 
     local channel_note_dims = #channels * NOTE_DIMS
-    local rasterized = torch.zeros(channel_note_dims, raster_clock.raster_range)
+    local min_value = from_byte(0)
+    local rasterized = torch.Tensor(channel_note_dims, raster_clock.raster_range):fill(min_value)
 
     --print(note_events)
     --print(rasterized:size())
