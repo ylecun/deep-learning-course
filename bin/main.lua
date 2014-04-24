@@ -93,7 +93,8 @@ print('Num training: '..ds.data_train():size())
 model = models.simple_2lnn(ds, args.hidden_units)
 
 --models.train_model(ds, model, nn.AbsCriterion())
-err_train, err_test = models.train_model(ds, model, PerceptualLoss())
+local to_byte = mid.dataset.default_to_byte
+err_train, err_test = models.train_model(ds, model, PerceptualLoss(to_byte))
 
 print("avg error train/test", err_train, err_test)
 

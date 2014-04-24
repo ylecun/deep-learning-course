@@ -73,7 +73,7 @@ function SgdMomentum:train(dataset)
       end
 
       currentError = currentError / dataset:size()
-      print("# current error = " .. currentError)
+      print("# current error = "..currentError)
       iteration = iteration + 1
       currentLearningRate = self.learningRate/(1 + (iteration * self.learningRateDecay))
 
@@ -85,7 +85,7 @@ function SgdMomentum:train(dataset)
       -- Check convergence (expect decrease).
       local errDelta = errPrev - currentError
       if errDelta < self.convergeEps then
-         print("# SgdMomentum: converged after "..iterations.." iterations")
+         print("# SgdMomentum: converged after "..t.." iterations")
          break
       end
       errPrev = currentError

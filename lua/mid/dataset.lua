@@ -32,12 +32,12 @@ local function abs_to_raster_time(t_abs, t_min, gcd)
 end
 
 -- [0, 255] => [-1, 1]
-local function default_from_byte(x)
+function dataset.default_from_byte(x)
     return (x / 127.5) - 1
 end
 
 -- [-1, 1] => [0, 255]
-local function default_to_byte(x)
+function dataset.default_to_byte(x)
     return math.max(0, math.min(255, math.floor((x + 1) * 127.5)))
 end
 
@@ -280,7 +280,7 @@ end
 function dataset.load(dir, time_sig, input_len, target_len, pct_train, from_byte)
 
     -- Default from_byte has values in [-1, 1]
-    from_byte = from_byte or default_from_byte
+    from_byte = from_byte or dataset.default_from_byte
 
     -- Get all midi files in path.
     mid_files = {}
@@ -478,7 +478,7 @@ end
 --specify base data such as tempos, instruments, and so fourth.
 function dataset.compose(from_source, song, debounce_thresh, to_byte)
 
-    to_byte = to_byte or default_to_byte
+    to_byte = to_byte or dataset.default_to_byte
 
     -- Ignore jumps of +/- debounce_thresh.
     debounce_thresh = debounce_thresh or 0

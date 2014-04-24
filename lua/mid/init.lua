@@ -43,6 +43,8 @@ mid = {
     dataset = {
         load = mid_dataset.load,
         compose = mid_dataset.compose,
+        default_to_byte = mid_dataset.default_to_byte,
+        default_from_byte = mid_dataset.default_from_byte,
     },
 }
 return mid
