@@ -13,7 +13,6 @@ end
 
 function SgdMomentum:train(dataset)
 
-   local iteration = 1
    local currentLearningRate = self.learningRate
    local module = self.module
    local criterion = self.criterion
@@ -40,6 +39,7 @@ function SgdMomentum:train(dataset)
 
    while true do
 
+      local iteration = 1
       local currentError = 0
       for t = 1,dataset:size() do
          local example = dataset[shuffledIndices[t]]
@@ -74,10 +74,9 @@ function SgdMomentum:train(dataset)
 
       currentError = currentError / dataset:size()
       print("# current error = "..currentError)
-      iteration = iteration + 1
-      currentLearningRate = self.learningRate/(1 + (iteration * self.learningRateDecay))
+      currentLearningRate = self.learningRate / (1 + (iteration * self.learningRateDecay))
 
-      if self.maxIteration > 0 and iteration > self.maxIteration then
+      if self.maxIteration > 0 and iteration >= self.maxIteration then
          print("# SgdMomentum: you have reached the maximum number of iterations")
          break
       end
@@ -85,10 +84,11 @@ function SgdMomentum:train(dataset)
       -- Check convergence (expect decrease).
       local errDelta = errPrev - currentError
       if errDelta < self.convergeEps then
-         print("# SgdMomentum: converged after "..t.." iterations")
+         print("# SgdMomentum: converged after "..iteration.." iterations")
          break
       end
       errPrev = currentError
 
+      iteration = iteration + 1
    end
 end
