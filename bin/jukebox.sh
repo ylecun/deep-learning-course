@@ -40,6 +40,7 @@ if [ ! $# == 6 ]; then
     usage
     exit 1
 fi
+
 input_dir=$1; shift
 time_sig=$1; shift
 model_path=$1; shift
@@ -48,29 +49,22 @@ output_wnd=$1; shift
 length=$1; shift
 
 # Choose temp location.
+
 date_str=`date +%Y%m%d_%H%M%S`
 output_dir="/tmp/jukebox-${date_str}"
 echo Using output dir: ${output_dir}
+
+# Make sure output_dir exists.
+
 mkdir ${output_dir} >/dev/null 2>&1
 if [ ! -d "${output_dir}" ]; then
     echo "Failed creating output directory ${output_dir}" 1>&2
     exit 1
 fi
 
-# Create sequence of songs.
-song_idx=1
-while true; do
+# Create a long sequence of songs (we'll probably quit before then).
 
-    filename="${song_idx}.mid"
-    echo "Composing and playing ${filename}"
+th "${compose_script}" -i ${input_wnd} -o ${output_wnd} -n "${filename}" \
+    "${input_dir}" ${time_sig} "${model_path}" ${length} "${output_dir}" \
+    -n gen -c 10000 -p
 
-    th "${compose_script}" -i ${input_wnd} -o ${output_wnd} -n "${filename}" \
-        "${input_dir}" ${time_sig} "${model_path}" ${length} "${output_dir}" \
-        >/dev/null 2>&1
-
-    timidity "${output_dir}/${filename}"
-
-    # Increment song index.
-    ((++song_idx))
-
-done

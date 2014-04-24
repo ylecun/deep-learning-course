@@ -25,6 +25,8 @@ Compose a new song from a model.
   -i, --input-window-size (default 10) size in gcd ticks of input point X
   -o, --output-window-size (default 1) size in gcd ticks of target point Y
   -n, --filename (string) output file name override
+  -c, --count (default 1) number of songs to compose
+  -p, --play play generated songs
   <INPUT_DIR> (string) directory where input *.mid files reside
   <TIME_SIG_CHANNELS_GCD> (string) time signature, channels, and gcd
                           e.g. 4/2-8-24-4-256
@@ -55,15 +57,48 @@ if nil == model then
     error('Could not load model '..args.MODEL_PATH)
 end
 
--- Compose a song from a random data point.
+-- Get a function that can append a count index to the filename.
+local prefix_func
+if args.count > 1 then
+    prefix_func = function(prefix, n)
+        if #prefix > 0 then
+            return prefix.."-"..tostring(n)
+        else
+            return tostring(n)
+        end
+    end
+else
+    prefix_func = function(prefix, n)
+        return prefix
+    end
+end
+
 local data = ds.data_test()
 local num_points = data:size()
-local random_point = math.random(num_points)
-local seed = data[random_point][1]
-song_data = models.predict(model, seed, args.LENGTH)
-song = mid.dataset.compose(ds.sources[1], song_data, 4)
 
--- Write out generated song.
-gen_filename = args.filename or 'gen-'..date_str..'.mid'
-gen_output_path = path.join(args.OUTPUT_DIR, gen_filename)
-mid.data.write(song.middata, io.open(gen_output_path, 'w'))
+local prefix = args.filename or 'gen-'..date_str
+for i = 1, args.count do
+
+    -- Compose a song from a random data point.
+    local seed = data[math.random(num_points)][1]
+    local song_data = models.predict(model, seed, args.LENGTH)
+    local random_source = ds.sources[math.random(#ds.sources)]
+    local song = mid.dataset.compose(random_source, song_data, 0)
+
+    -- Write out generated song.
+    gen_filename = prefix_func(prefix, i)..".mid"
+    gen_output_path = path.join(args.OUTPUT_DIR, gen_filename)
+
+    print("Composing song "..gen_output_path)
+
+    mid.data.write(song.middata, io.open(gen_output_path, 'w'))
+
+    print("Playing song "..gen_output_path)
+
+    if args.play then
+        local ret = os.execute("timidity "..gen_output_path..">/dev/null 2>&1")
+        if ret ~= 0 then
+            error("Got code "..tostring(ret).." playing song")
+        end
+    end
+end
