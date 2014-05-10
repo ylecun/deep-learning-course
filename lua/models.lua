@@ -80,11 +80,11 @@ function models.simple_2lnn_iso_cmb(ds, num_hidden)
 end
 
 --- Train model using the given dataset.
-function models.train_model(ds, model, criterion)
+function models.train_model(ds, model, criterion, train_args)
 
     local train = ds.data_train()
     --local trainer = nn.StochasticGradient(model, criterion)
-    local trainer = nn.SgdMomentum(model, criterion)
+    local trainer = nn.SgdMomentum(model, criterion, train_args)
     --trainer.maxIteration = 2
     trainer:train(train)
 

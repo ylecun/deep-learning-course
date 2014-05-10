@@ -99,12 +99,16 @@ print('Num training: '..ds.data_train():size())
 -- Create 2-layer NN with specified hidden units. Each hidden unit is a feature
 -- extractor that is applied to an input time slice for a single note.
 local model
+local train_args
 if "iso" == args.model_type then
     model = models.simple_2lnn_iso(ds, args.hidden_units)
+    train_args = { learning_rate = 1e-2, learning_rate_decay = 0.1 }
 elseif "cmb" == args.model_type then
     model = models.simple_2lnn_cmb(ds, args.hidden_units)
+    train_args = { learning_rate = 1e-4, mini_batch_size = 200, learning_rate_decay = 0.3 }
 elseif "iso+cmb" == args.model_type then
     model = models.simple_2lnn_iso_cmb(ds, args.hidden_units)
+    train_args = { learning_rate = 1e-4, mini_batch_size = 200, learning_rate_decay = 0.3 }
 end
 
 -- Create RNN when requested.
@@ -128,7 +132,7 @@ criterion:forward(train_model:forward(ds.points[1][1]), ds.points[1][2])
 train_model:reset(1e-1)
 
 -- Train.
-err_train, err_test = models.train_model(ds, train_model, criterion)
+err_train, err_test = models.train_model(ds, train_model, criterion, train_args)
 print("avg error train/test", err_train, err_test)
 
 -- Append command-line options to the model.
