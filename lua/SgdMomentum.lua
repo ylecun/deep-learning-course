@@ -155,18 +155,21 @@ function SgdMomentum:train(dataset)
         current_error = current_error / dataset:size()
         print("# current error = "..current_error)
 
+        -- Check convergence (expect decrease).
+        local err_delta = err_prev - current_error
+        if err_delta >= 0 and err_delta < self.converge_eps then
+            print("# SgdMomentum: converged after "..iteration.." iterations")
+            break
+        elseif err_delta < 0 then
+            print("# SgdMomentum: WARNING : error increased by "
+                  ..(-err_delta).." on iteration "..iteration)
+        end
+        err_prev = current_error
+
         if self.max_iteration > 0 and iteration >= self.max_iteration then
             print("# SgdMomentum: you have reached the maximum number of iterations")
             break
         end
-
-        -- Check convergence (expect decrease).
-        local err_delta = err_prev - current_error
-        if err_delta < self.converge_eps then
-            print("# SgdMomentum: converged after "..iteration.." iterations")
-            break
-        end
-        err_prev = current_error
 
         iteration = iteration + 1
     end

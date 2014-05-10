@@ -29,7 +29,8 @@ function models.simple_2lnn_iso(ds, num_hidden)
 
     local mlp = models.append_ds_info(ds, nn.Sequential())
     mlp:add(nn.Linear(mlp.dims.input[2], num_hidden))
-    mlp:add(nn.RluMax())
+    --mlp:add(nn.RluMax())
+    mlp:add(nn.Tanh())
     mlp:add(nn.Linear(num_hidden, mlp.dims.output[2]))
 
     return mlp
@@ -47,7 +48,8 @@ function models.simple_2lnn_cmb(ds, num_hidden)
     -- By transposing, we extract features over the notes for each time slice.
     mlp:add(nn.Transpose({1, 2}))
     mlp:add(nn.Linear(num_notes, num_hidden))
-    mlp:add(nn.RluMax())
+    --mlp:add(nn.RluMax())
+    mlp:add(nn.Tanh())
     -- Flatten the network.
     local flattened_len = mlp.dims.input[2] * num_hidden
     mlp:add(nn.Reshape(flattened_len))
@@ -68,7 +70,8 @@ function models.simple_2lnn_iso_cmb(ds, num_hidden)
     local mlp = models.append_ds_info(ds, nn.Sequential())
     local num_notes = mlp.dims.input[1]
     mlp:add(nn.Linear(mlp.input.dims[2], num_hidden))
-    mlp:add(nn.RluMax())
+    --mlp:add(nn.RluMax())
+    mlp:add(nn.Tanh())
     -- Flatten the network.
     local flattened_len = num_notes * num_hidden
     mlp:add(nn.Reshape(flattened_len))

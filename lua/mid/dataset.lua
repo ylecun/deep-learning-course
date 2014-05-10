@@ -281,7 +281,7 @@ local function load_sources(dir, time_sig, from_byte)
     end
 
     -- Get all midi files in path.
-    mid_files = {}
+    local mid_files = {}
     for filename in lfs.dir(dir) do
         if filename:lower():find(".mid") ~= nil then
             table.insert(mid_files, filename)
@@ -289,7 +289,7 @@ local function load_sources(dir, time_sig, from_byte)
     end
 
     -- Collect rasterized data matching time signature.
-    sources = {}
+    local sources = {}
 
     -- For each file.
     for _,filename in ipairs(mid_files) do
@@ -300,9 +300,9 @@ local function load_sources(dir, time_sig, from_byte)
         local status, err = pcall(function()
 
             -- Load MIDI data.
-            middata = mid_data.read(file)
+            local middata = mid_data.read(file)
 
-            note_event_data = extract_note_event_data(middata)
+            local note_event_data = extract_note_event_data(middata)
 
             -- Get sorted list of channels from table of active channels.
             local channel_order = {}
@@ -466,6 +466,47 @@ function dataset.load_rnn(dir, time_sig, input_len, unroll_len, pct_train, from_
     local num_train = math.ceil(#points * pct_train)
 
     return points_to_dataset(time_sig, sources, points, input_len, 1, num_train)
+end
+
+--- Generate histogram of time_sig -> #points.
+function dataset.stat(dir)
+
+    -- Get all midi files in path.
+    local mid_files = {}
+    for filename in lfs.dir(dir) do
+        if filename:lower():find(".mid") ~= nil then
+            table.insert(mid_files, filename)
+        end
+    end
+
+    local time_sig_hist = {}
+
+    for _,filename in ipairs(mid_files) do
+
+        local file_path = dir.."/"..filename
+        local file = io.open(file_path, "rb")
+
+        local status, err = pcall(function()
+            local middata = mid_data.read(file)
+            local note_event_data = extract_note_event_data(middata)
+            local points = note_event_data.raster_clock.raster_range
+            -- Add points for time_size else initialize.
+            if time_sig_hist[note_event_data.time_sig] ~= nil then
+                time_sig_hist[note_event_data.time_sig] =
+                    time_sig_hist[note_event_data.time_sig] + points
+            else
+                time_sig_hist[note_event_data.time_sig] = points
+            end
+
+        end)
+
+        if not status then
+            print("Failed to process "..file_path)
+            print(err)
+        end
+    end
+
+    return time_sig_hist
 end
 
 --- Add note events.
