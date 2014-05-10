@@ -19,7 +19,7 @@ local binary_search = util.binary_search
 local string_io = util.string_io
 
 --- Number of unique note values allowed by MIDI.
-local NOTE_DIMS = 128
+local NOTE_DIMS = mid_data.NOTE_DIMS
 
 local dataset = {}
 
@@ -34,11 +34,13 @@ end
 -- [0, 255] => [-1, 1]
 function dataset.default_from_byte(x)
     return (x / 127.5) - 1
+    --return x / 255.0
 end
 
 -- [-1, 1] => [0, 255]
 function dataset.default_to_byte(x)
     return math.max(0, math.min(255, math.floor((x + 1) * 127.5)))
+    --return math.max(0, math.min(255, math.floor(x * 255.0)))
 end
 
 --- A simple clock converting raw clock time to raster time.
@@ -209,9 +211,11 @@ local function extract_note_event_data(middata)
 
     -- Loop over all tracks and events and collect clock stats for note
     -- events.
+    local num_tracks_with_notes = 0
     for track_idx, track in ipairs(middata.tracks) do
 
         local clock = 0
+        local note_not_found = 1
         for event_idx, event in ipairs(track.events) do
 
             clock = clock + event.delta_time
@@ -219,6 +223,9 @@ local function extract_note_event_data(middata)
             local note_on = event.midi == CODES.midi.note_on
             local note_off = event.midi == CODES.midi.note_off
             if note_on or note_off then
+                -- Count number of tracks (can't using channle_to_track map).
+                num_tracks_with_notes = num_tracks_with_notes + note_not_found
+                note_not_found = 0
 
                 -- Get channel-specific list of events for this note.
                 local channel = event.channel
@@ -248,7 +255,7 @@ local function extract_note_event_data(middata)
     return {
         raster_clock = raster_clock,
         channel_to_track = channel_to_track,
-        time_sig = time_hash.."-"..#channel_to_track.."-"..clock_gcd,
+        time_sig = time_hash.."-"..num_tracks_with_notes.."-"..clock_gcd,
         events = note_events,
     }
 
@@ -268,20 +275,10 @@ local function make_source(filename, middata,
     }
 end
 
---- Load a .mid file as a torch dataset.
---:param dir: the directory containing .mid files
---:param time_sig: the time signature in the form
---    num/denom-32notesperquarter-ticksperclick-channels-gcd
---:param input_len: the number of discrete time steps per input point X
---:param target_len: the number of discrete time steps per target point Y
---:param pct_train: the proportion of points to use as training data
---:param function from_byte: Takes integer velocity from MIDI to
--- rasterized value (default transforms in [-1, 1]).
---:return: train and test sets of pairs (X, Y)
-function dataset.load(dir, time_sig, input_len, target_len, pct_train, from_byte)
-
-    -- Default from_byte has values in [-1, 1]
-    from_byte = from_byte or dataset.default_from_byte
+local function load_sources(dir, time_sig, from_byte)
+    if nill == from_byte then
+        error("Must specify from_byte")
+    end
 
     -- Get all midi files in path.
     mid_files = {}
@@ -331,15 +328,81 @@ function dataset.load(dir, time_sig, input_len, target_len, pct_train, from_byte
               table.insert(sources,
                            make_source(filename, middata,
                                        note_event_data, channel_order, rasterized))
-
---            else
---              print("Rejecting file "..file_path)
---              print("time sig: "..note_event_data.time_sig)
             end
         end)
 
         file:close()
     end
+
+    return sources
+end
+
+--- Create a dataset from it's components.
+local function points_to_dataset(time_sig, sources, points, input_len, output_len, num_train)
+
+    --- Closure that allows indexing data.
+    local function data(offset, len)
+        local ds = {}
+
+        ds.size = function()
+            return len
+        end
+
+        local mt = getmetatable(ds)
+        if not mt then
+            mt = {}
+        end
+        mt.__index = function(ds, key)
+            local idx = tonumber(key)
+            if idx then
+                if idx >= 1 and idx <= len then
+                    return points[offset + idx]
+                else
+                    return nil
+                end
+            else
+                error("Must index by a number")
+            end
+        end
+        setmetatable(ds, mt)
+
+        return ds
+    end
+
+    local num_test = #points - num_train
+
+    local data_train = data(0, num_train)
+    local data_test = data(num_train, num_test)
+
+    return {
+        data_train = function() return data_train end,
+        data_test = function() return data_test end,
+        num_train = num_train,
+        num_test = num_test,
+        points = points,
+        sources = sources,
+        time_sig = time_sig,
+        logical_dims = { input = torch.Tensor({ points[1][1]:size(1), input_len }),
+                         output = torch.Tensor({ points[1][2]:size(1),  output_len}), },
+    }
+end
+
+--- Load a .mid file as a torch dataset.
+--:param dir: the directory containing .mid files
+--:param time_sig: the time signature in the form
+--    num/denom-32notesperquarter-ticksperclick-channels-gcd
+--:param input_len: the number of discrete time steps per input point X
+--:param target_len: the number of discrete time steps per target point Y
+--:param pct_train: the proportion of points to use as training data
+--:param function from_byte: Takes integer velocity from MIDI to
+-- rasterized value (default transforms in [-1, 1]).
+--:return: train and test sets of pairs (X, Y)
+function dataset.load(dir, time_sig, input_len, target_len, pct_train, from_byte)
+
+    -- Default from_byte has values in [-1, 1]
+    from_byte = from_byte or dataset.default_from_byte
+
+    sources = load_sources(dir, time_sig, from_byte)
 
     -- For each valid source, split data into points and then partition into
     -- train and test sets. Each torch narrow() does not copy data so it can
@@ -348,7 +411,7 @@ function dataset.load(dir, time_sig, input_len, target_len, pct_train, from_byte
     local input_target_len = input_len + target_len
     for _, source in pairs(sources) do
         local data = source.data
-        for i = input_target_len,data:size()[2] do
+        for i = input_target_len, data:size()[2] do
             local X_begin = i - input_target_len + 1
             local Y_begin = i - target_len + 1
             local X, Y = data:narrow(2, X_begin, input_len),
@@ -360,76 +423,49 @@ function dataset.load(dir, time_sig, input_len, target_len, pct_train, from_byte
     -- Shuffle the points and then partition into train, test sets.
     util.shuffle(points)
     local num_train = math.ceil(#points * pct_train)
-    local num_test = #points - num_train
 
-    --- Train dataset.
-    -- Must have size() and index operator [].
-    local function data_train()
-        local ds = {}
+    return points_to_dataset(time_sig, sources, points, input_len, target_len, num_train)
+end
 
-        ds.size = function()
-            return num_train
+--- Load a .mid file as a torch dataset used for RNNs.
+--:param dir: the directory containing .mid files
+--:param time_sig: the time signature in the form
+--    num/denom-32notesperquarter-ticksperclick-channels-gcd
+--:param input_len: the number of discrete time steps per input point X
+--:param unroll_len: number of times to unroll the network
+--:param pct_train: the proportion of points to use as training data
+--:param function from_byte: Takes integer velocity from MIDI to
+-- rasterized value (default transforms in [-1, 1]).
+--:return: train and test sets of pairs (X, Y)
+function dataset.load_rnn(dir, time_sig, input_len, unroll_len, pct_train, from_byte)
+
+    -- Default from_byte has values in [-1, 1]
+    from_byte = from_byte or dataset.default_from_byte
+
+    sources = load_sources(dir, time_sig, from_byte)
+
+    -- For each valid source, split data into points and then partition into
+    -- train and test sets. Each torch narrow() does not copy data so it can
+    -- store efficiently overlapping subsequences of the source.
+    local points = {}
+    local input_target_len = input_len + unroll_len
+    local rnn_input_len = input_len + unroll_len - 1
+    for _, source in pairs(sources) do
+        local data = source.data
+        for i = input_target_len, data:size()[2] do
+            local X_begin = i - input_target_len + 1
+            local Y_begin = i - unroll_len + 1
+            local X, Y = data:narrow(2, X_begin, rnn_input_len),
+                data:narrow(2, Y_begin, unroll_len)
+            table.insert(points, {X, Y})
         end
-
-        local mt = getmetatable(ds)
-        if not mt then
-            mt = {}
-        end
-        mt.__index = function(ds, key)
-            local num = tonumber(key)
-            if num then
-                if num <= num_train then
-                    return points[num]
-                else
-                    return nil
-                end
-            else
-                error("Must index by a number")
-            end
-        end
-        setmetatable(ds, mt)
-
-        return ds
     end
 
-    --- Test dataset iterator.
-    -- Must have size() and index operator [].
-    local function data_test()
-        local ds = {}
+    -- Shuffle the points and then partition into train, test sets.
+    util.shuffle(points)
+    local num_train = math.ceil(#points * pct_train)
 
-        ds.size = function()
-            return num_test
-        end
-
-        local mt = getmetatable(ds)
-        if not mt then
-            mt = {}
-        end
-        mt.__index = function(ds, key)
-            local num = tonumber(key)
-            if num then
-                if num > 0 then
-                    return points[num_train + num]
-                else
-                    return nil
-                end
-            else
-                error("Must index by a number")
-            end
-        end
-        setmetatable(ds, mt)
-
-        return ds
-    end
-
-    return {
-        data_train = data_train,
-        data_test = data_test,
-        num_train = num_train,
-        num_test = num_test,
-        points = points,
-        sources = sources,
-    }
+    return points_to_dataset(time_sig, sources, points, input_len, 1, num_train)
 end
 
 --- Add note events.
@@ -486,6 +522,7 @@ function dataset.compose(from_source, song, debounce_thresh, to_byte)
 
     local source = util.copy(from_source)
     source.data = song
+    source.name = "composed"
     source.raster_clock = from_source.raster_clock.new_raster_time_end(song:size(2))
     local raster_clock = source.raster_clock
 
@@ -601,98 +638,128 @@ end
 function dataset._test()
 
     local assert_equals = test_util.assert_equals
+    local assert_true = test_util.assert_true
     local check_test = test_util.check_test
+
+    -- See if we have the midi folder.
+    local DATA_DIR = "../midi"
+    local stat, _ = pcall(function() lfs.dir(DATA_DIR) end)
+    if not stat then
+        error(DATA_DIR.." not found")
+    end
+
+    -- Get midi files.
+    mid_files = {}
+    for filename in lfs.dir(DATA_DIR) do
+        if filename:lower():find(".mid") ~= nil then
+            table.insert(mid_files, filename)
+        end
+    end
+    if #mid_files == 0 then
+        error("No midi files in dir "..DATA_DIR)
+    end
 
     -- Test raster and back.
     check_test(function()
 
         local MAX_TO_TEST = 10
 
-        -- See if we have the midi folder.
-        local data_dir = "../midi"
-        local stat, _ = pcall(function() lfs.dir(data_dir) end)
-        if stat then
+        util.shuffle(mid_files)
+        local num_to_test = math.min(MAX_TO_TEST, #mid_files)
 
-            mid_files = {}
-            for filename in lfs.dir(data_dir) do
-                if filename:lower():find(".mid") ~= nil then
-                    table.insert(mid_files, filename)
+        for i = 1, num_to_test do
+            local filename = mid_files[i]
+            local file_path = DATA_DIR.."/"..filename
+            print("Using .mid file: "..file_path)
+
+            local middata = mid_data.read(io.open(file_path))
+
+            -- Keep 10 events.
+            for i, track in ipairs(middata.tracks) do
+                local events_new = {}
+                num_events = math.min(8, #track.events - 1)
+                for j = 1, num_events do
+                    table.insert(events_new, track.events[j])
                 end
+                table.insert(events_new, track.events[#track.events])
+                middata.tracks[i].events = events_new
             end
+            --print(middata)
 
-            util.shuffle(mid_files)
-            local num_to_test = 1 --math.min(MAX_TO_TEST, #mid_files)
+            -- Rasterize and then write out.
+            local note_event_data = extract_note_event_data(middata)
 
-            for i = 1, num_to_test do
-                local filename = mid_files[i]
-                --local file_path = data_dir.."/"..filename
-                local file_path = "../midi/027800b_.mid"
-                print("Using .mid file: "..file_path)
-
-                local middata = mid_data.read(io.open(file_path))
-
-                -- Keep 10 events.
-                for i, track in ipairs(middata.tracks) do
-                    local events_new = {}
-                    num_events = math.min(8, #track.events - 1)
-                    for j = 1, num_events do
-                        table.insert(events_new, track.events[j])
-                    end
-                    table.insert(events_new, track.events[#track.events])
-                    middata.tracks[i].events = events_new
-                end
-                --print(middata)
-
-                -- Rasterize and then write out.
-                local note_event_data = extract_note_event_data(middata)
-
-                -- Get sorted list of channels from table of active channels.
-                local channel_order = {}
-                for channel in pairs(note_event_data.channel_to_track) do
-                    table.insert(channel_order, channel)
-                end
-                table.sort(channel_order)
-
-                -- Rasterize song and append to output.
-                local rasterized = rasterize_song(
-                        channel_order,
-                        note_event_data.raster_clock, note_event_data.events)
-
-                -- Compose into a new source that should receive the same data.
-
-                local source =
-                        make_source(filename, middata,
-                                    note_event_data, channel_order, rasterized)
-                
-                local new_source = dataset.compose(source, rasterized)
-                print(new_source.channel_order)
-                print(new_source.channel_to_track)
-
-                print("Summary")
-                for i = 1, #middata.tracks do
-                    print(i, #source.middata.tracks[i].events,
-                             #new_source.middata.tracks[i].events)
-                    --for j = 1, #middata.tracks[i].events do
-                    --    print(tostring(middata.tracks[i].events[j]),
-                    --          tostring(new_source.middata.tracks[i].events[j]))
-                    --end
-                end
-                --print(new_source.middata.tracks[5])
-                --print(source.middata.tracks[5])
-
-                -- TODO: How can the same note stop/start at the same time?
-
-                --local mock_file = string_io()
-                --mid_data.write(new_source.middata, mock_file)
-
-                ---- Check that the written file matches exactly the source.
-                --local mid_file_bin = io.open(file_path):read(1024*1024*128)
-                --assert_equals(mid_file_bin, mock_file.data)
-
+            -- Get sorted list of channels from table of active channels.
+            local channel_order = {}
+            for channel in pairs(note_event_data.channel_to_track) do
+                table.insert(channel_order, channel)
             end
+            table.sort(channel_order)
 
-        else
-            error(data_dir.." not found")
+            -- Rasterize song and append to output.
+            local rasterized = rasterize_song(
+                    channel_order,
+                    note_event_data.raster_clock, note_event_data.events)
+
+            -- Compose into a new source that should receive the same data.
+
+            local source =
+                    make_source(filename, middata,
+                                note_event_data, channel_order, rasterized)
+            
+            local new_source = dataset.compose(source, rasterized)
+            print(new_source.channel_order)
+            print(new_source.channel_to_track)
+
+            print("Summary")
+            for i = 1, #middata.tracks do
+                print(i, #source.middata.tracks[i].events,
+                         #new_source.middata.tracks[i].events)
+                --for j = 1, #middata.tracks[i].events do
+                --    print(tostring(middata.tracks[i].events[j]),
+                --          tostring(new_source.middata.tracks[i].events[j]))
+                --end
+            end
+            --print(new_source.middata.tracks[5])
+            --print(source.middata.tracks[5])
+
+            -- TODO: How can the same note stop/start at the same time?
+
+            --local mock_file = string_io()
+            --mid_data.write(new_source.middata, mock_file)
+
+            ---- Check that the written file matches exactly the source.
+            --local mid_file_bin = io.open(file_path):read(1024*1024*128)
+            --assert_equals(mid_file_bin, mock_file.data)
+
+        end
+    end)
+
+    -- Test iteration over points.
+    check_test(function()
+
+        -- Load data.
+        ds = dataset.load(DATA_DIR, "4/2-8-24-4-256", 10, 1, 0.8)
+
+        assert_true("data sizes not equal to total points",
+                    (ds.data_train():size() + ds.data_test():size()) == #ds.points)
+
+        -- Iterate over train and test points.
+
+        local data = ds.data_train()
+        assert_true("data size == 0", data:size() > 0)
+        for i = 1, data:size() do
+            assert_true("point "..i.." of "..data:size().." is nil", data[i] ~= nil)
+            assert_true("point "..i.." of "..data:size().." has X is nil", data[i][1] ~= nil)
+            assert_true("point "..i.." of "..data:size().." has Y is nil", data[i][2] ~= nil)
+        end
+
+        local data = ds.data_test()
+        assert_true("data size == 0", data:size() > 0)
+        for i = 1, data:size() do
+            assert_true("point "..i.." of "..data:size().." is nil", data[i] ~= nil)
+            assert_true("point "..i.." of "..data:size().." has X is nil", data[i][1] ~= nil)
+            assert_true("point "..i.." of "..data:size().." has Y is nil", data[i][2] ~= nil)
         end
 
     end)

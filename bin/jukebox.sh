@@ -8,13 +8,10 @@ prog=`basename $0`
 
 usage () {
     echo """
-Usage: $prog INPUT_DIR TIME_SIG MODEL_PATH INPUT_WND OUTPUT_WND LENGTH
+Usage: $prog INPUT_DIR MODEL_PATH LENGTH
 Compose a new song from a model.
   <INPUT_DIR> directory where input *.mid files reside
-  <TIME_SIG> time signature, channels, and gcd e.g. 4/2-8-24-4-256
   <MODEL_PATH> path to trained model
-  <INPUT_WND> size in gcd ticks of input point X
-  <OUTPUT_WND> size in gcd ticks of target point Y
   <LENGTH> length of generated songs
 """
 }
@@ -35,17 +32,14 @@ if ! which timidity >/dev/null 2>&1 ; then
 fi
 
 # Get args.
-if [ ! $# == 6 ]; then
+if [ ! $# == 3 ]; then
     echo 'Invalid arguments' 1>&2
     usage
     exit 1
 fi
 
 input_dir=$1; shift
-time_sig=$1; shift
 model_path=$1; shift
-input_wnd=$1; shift
-output_wnd=$1; shift
 length=$1; shift
 
 # Choose temp location.
@@ -64,7 +58,7 @@ fi
 
 # Create a long sequence of songs (we'll probably quit before then).
 
-th "${compose_script}" -i ${input_wnd} -o ${output_wnd} -n "${filename}" \
-    "${input_dir}" ${time_sig} "${model_path}" ${length} "${output_dir}" \
+th "${compose_script}" -n "${filename}" \
+    "${input_dir}" "${model_path}" ${length} "${output_dir}" \
     -n gen -c 10000 -p
 

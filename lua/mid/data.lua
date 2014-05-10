@@ -27,6 +27,7 @@ local data = {
     MODE_SINGLE_TRACK = 0,
     MODE_MULTI_SYNCH = 1,
     MODE_MULTI_ASYNCH = 2,
+    NOTE_DIMS = 128,
 }
 local FILE_HEADER, TRACK_HEADER = data.FILE_HEADER, data.TRACK_HEADER
 

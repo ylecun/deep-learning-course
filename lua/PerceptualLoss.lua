@@ -1,54 +1,66 @@
 require "nn"
 require "math"
 
-local PerceptualLoss, parent = torch.class('PerceptualLoss', 'nn.Criterion')
+local PerceptualLoss, parent = torch.class('nn.PerceptualLoss', 'nn.Criterion')
 
 ---Takes to_byte in order to suppress any gradient when
 --the resulting conversion to byte has zero loss.
-function PerceptualLoss:__init(to_byte, lambda, alpha)
+function PerceptualLoss:__init(to_byte, perceptualThresh)
     parent.__init(self)
 
-    self.sizeAverage = true
-    self.lambda = lambda or 2
     self.alpha = alpha or 2
     self.t1 = torch.Tensor()
     self.mask = torch.Tensor()
+    self.perceptualThresh = perceptualThresh or 4 / 255
 
     if nil == to_byte then
-       error("Must supply to_byte() function")
-    end
-    self.to_byte = to_byte
-
-    self.mask_func = function(_, xx, yy)
-       local X = to_byte(xx)
-       local Y = to_byte(yy)
-       local diff = X - Y
-       return diff ~= 0 and 1 or 0
+        error("Must supply to_byte() function")
     end
 
-end
+    self.loss_func = function(_, xx, yy)
+        local X = to_byte(xx)
+        local Y = to_byte(yy)
+        local diff = math.abs(xx - yy)
 
---- We wish to penalize much more highly missed or extraneous notes.
---    l = abs(x - y) + (\lambda * abs(x - y))^\alpha
+        -- Polynomial loss when X is 0 and Y > 0.
+        if X == 0 and Y > 0 then
+            return diff * 2
+        elseif diff > self.perceptualThresh then
+            return diff
+        else
+            return 0
+        end
+    end
+
+    self.grad_func = function(_, xx, yy)
+        local X = to_byte(xx)
+        local Y = to_byte(yy)
+        local diff = math.abs(xx - yy)
+        local sign = xx >= yy and 1 or -1
+
+        -- Polynomial loss when X is 0 and Y > 0.
+        if X == 0 and Y > 0 then
+            return sign * 2
+        elseif diff > self.perceptualThresh then
+            return sign
+        else
+            return 0
+        end
+    end
+ end
+
 function PerceptualLoss:updateOutput(input, target)
 
     local X = input
     local Y = target
     local t1 = self.t1:resizeAs(input)
-    local mask = self.mask:resizeAs(input)
 
-    mask:map2(X, Y, self.mask_func)
+    local loss = t1:map2(X, Y, self.loss_func):sum()
 
-    t1:add(X, -1, Y):abs():cmul(mask)
-    local loss_abs = t1:sum()
-    local loss_pow = t1:pow(self.alpha):sum() * self.lambda^(self.alpha)
-    local loss = loss_abs + loss_pow
-
-    if self.sizeAverage then
-        loss = loss / input:nElement()
-    end
-
-    --print("loss", loss, loss_abs, loss_pow, X:max(), Y:max())
+    --local xxmax = X:max()
+    --if xxmax > -1 then
+    --    print(xxmax, loss)
+    --end
 
     return loss
 end
@@ -57,28 +69,9 @@ function PerceptualLoss:updateGradInput(input, target)
 
     local X = input
     local Y = target
-    local t1 = self.t1:resizeAs(input)
-    local mask = self.mask:resizeAs(input)
     local gradInput = self.gradInput:resizeAs(input)
 
-    mask:map2(X, Y, self.mask_func)
-
-    -- Gradient of L1 is the sign of the difference.
-    t1:add(X, -1, Y):cmul(mask)
-    torch.sign(gradInput, t1)
-
-    -- Here is input to polynomial.
-    local scale = self.alpha * self.lambda * self.lambda^(self.alpha - 1)
-    t1:abs():pow(self.alpha - 1):mul(scale)
-
-    -- Scale by derivative of polynomial expression and add to grad.
-    gradInput:addcmul(gradInput, t1)
-
-    if self.sizeAverage then
-        gradInput:mul(1.0 / input:nElement())
-    end
-
-    --print("grad", gradInput:max(), gradInput:min(), X:max(), Y:max())
+    gradInput:map2(X, Y, self.grad_func)
 
     return gradInput
 end
